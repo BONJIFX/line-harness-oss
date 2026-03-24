@@ -7,7 +7,7 @@ workers_dev = true
 # Do NOT hardcode secrets here
 
 [vars]
-WORKER_URL = "https://your-worker.your-subdomain.workers.dev"
+WORKER_URL = "https://line-crm-worker.line-crm-api.workers.dev"
 
 [[d1_databases]]
 binding = "DB"
