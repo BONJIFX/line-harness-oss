@@ -13,6 +13,11 @@ export class FriendsResource {
     if (params?.offset !== undefined) query.set('offset', String(params.offset))
     if (params?.tagId) query.set('tagId', params.tagId)
     if (params?.search) query.set('search', params.search)
+    if (params?.metadata) {
+      for (const [key, value] of Object.entries(params.metadata)) {
+        query.set(`metadata.${key}`, String(value))
+      }
+    }
     const accountId = params?.accountId ?? this.defaultAccountId
     if (accountId) query.set('lineAccountId', accountId)
     const qs = query.toString()

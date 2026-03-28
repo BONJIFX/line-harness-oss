@@ -70,6 +70,15 @@ friends.get('/api/friends', async (c) => {
       conditions.push('f.display_name LIKE ?');
       binds.push(`%${search}%`);
     }
+    // Metadata filters: ?metadata.key=value (e.g. ?metadata.monthly_cost=〜100万円)
+    const url = new URL(c.req.url);
+    for (const [key, value] of url.searchParams.entries()) {
+      if (key.startsWith('metadata.')) {
+        const metaKey = key.slice('metadata.'.length);
+        conditions.push(`json_extract(f.metadata, '$.' || ?) = ?`);
+        binds.push(metaKey, value);
+      }
+    }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const countStmt = db.prepare(`SELECT COUNT(*) as count FROM friends f ${where}`);

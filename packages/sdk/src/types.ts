@@ -46,6 +46,7 @@ export interface FriendListParams {
   offset?: number
   tagId?: string
   search?: string
+  metadata?: Record<string, string>
   accountId?: string
 }
 

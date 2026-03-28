@@ -5,10 +5,14 @@ import { getClient } from "../client.js";
 export function registerListFriends(server: McpServer): void {
   server.tool(
     "list_friends",
-    "List friends with optional filtering by tag or name search. Returns paginated results with friend details.",
+    "List friends with optional filtering by tag, name search, or metadata values. Returns paginated results with friend details.",
     {
       search: z.string().optional().describe("Search friends by display name (partial match)"),
       tagId: z.string().optional().describe("Filter by tag ID"),
+      metadataFilter: z
+        .string()
+        .optional()
+        .describe("JSON string of metadata filters. e.g. '{\"monthly_cost\": \"〜100万円\", \"business_type\": \"EC・物販\"}'"),
       limit: z
         .number()
         .default(20)
@@ -19,12 +23,14 @@ export function registerListFriends(server: McpServer): void {
         .optional()
         .describe("LINE account ID (uses default if omitted)"),
     },
-    async ({ search, tagId, limit, offset, accountId }) => {
+    async ({ search, tagId, metadataFilter, limit, offset, accountId }) => {
       try {
         const client = getClient();
+        const metadata = metadataFilter ? JSON.parse(metadataFilter) as Record<string, string> : undefined;
         const result = await client.friends.list({
           search,
           tagId,
+          metadata,
           limit,
           offset,
           accountId,
