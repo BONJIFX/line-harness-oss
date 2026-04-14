@@ -330,19 +330,8 @@ async function scheduled(
   env: Env['Bindings'],
   _ctx: ExecutionContext,
 ): Promise<void> {
-  // Get all active accounts from DB, plus the default env account
+  // Get all active accounts from DB
   const dbAccounts = await getLineAccounts(env.DB);
-  const activeTokens = new Set<string>();
-
-  // Default account from env
-  activeTokens.add(env.LINE_CHANNEL_ACCESS_TOKEN);
-
-  // DB accounts
-  for (const account of dbAccounts) {
-    if (account.is_active) {
-      activeTokens.add(account.channel_access_token);
-    }
-  }
 
   // Build LineClient map for insight fetching (keyed by account id)
   const lineClients = new Map<string, LineClient>();
@@ -353,19 +342,19 @@ async function scheduled(
   }
   const defaultLineClient = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
 
-  // Run delivery for each account
+  // 配信系は1回だけ実行（内部でfriendのline_account_idから正しいlineClientを動的解決）
+  // 以前はアカウントごとにループしていたが、アカウントフィルタなしのDBクエリで
+  // 全アカウントの配信が各ループで重複実行されていたバグを修正
   const jobs = [];
-  for (const token of activeTokens) {
-    const lineClient = new LineClient(token);
-    jobs.push(
-      processStepDeliveries(env.DB, lineClient, env.WORKER_URL),
-      processScheduledBroadcasts(env.DB, lineClient, env.WORKER_URL),
-      processReminderDeliveries(env.DB, lineClient),
-    );
-  }
+  jobs.push(
+    processStepDeliveries(env.DB, defaultLineClient, env.WORKER_URL),
+    processScheduledBroadcasts(env.DB, defaultLineClient, env.WORKER_URL),
+    processReminderDeliveries(env.DB, defaultLineClient),
+  );
   // キュー処理は1回だけ実行（内部でアカウント別lineClientを解決する）
-  // ロック解除: タイムアウトでstuckしたブロードキャストを復旧
-  const { recoverStalledBroadcasts } = await import('@line-crm/db');
+  // ロック解除: タイムアウトでstuckした配信を復旧
+  const { recoverStalledBroadcasts, recoverStuckDeliveries } = await import('@line-crm/db');
+  jobs.push(recoverStuckDeliveries(env.DB));
   jobs.push(recoverStalledBroadcasts(env.DB));
   jobs.push(processQueuedBroadcasts(env.DB, defaultLineClient, env.WORKER_URL));
   jobs.push(checkAccountHealth(env.DB));

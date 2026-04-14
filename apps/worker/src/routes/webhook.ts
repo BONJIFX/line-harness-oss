@@ -126,12 +126,9 @@ async function handleEvent(
       const scenarioAccountMatch = !scenario.line_account_id || !lineAccountId || scenario.line_account_id === lineAccountId;
       if (scenario.trigger_type === 'friend_add' && scenario.is_active && scenarioAccountMatch) {
         try {
-          const existing = await db
-            .prepare(`SELECT id FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ?`)
-            .bind(friend.id, scenario.id)
-            .first<{ id: string }>();
-          if (!existing) {
-            const friendScenario = await enrollFriendInScenario(db, friend.id, scenario.id);
+          // INSERT OR IGNORE handles dedup via UNIQUE(friend_id, scenario_id)
+          const friendScenario = await enrollFriendInScenario(db, friend.id, scenario.id);
+          if (!friendScenario) continue; // already enrolled
 
             // Immediate delivery: if the first step has delay=0, send it now via replyMessage (free)
             const steps = await getScenarioSteps(db, scenario.id);
@@ -174,7 +171,6 @@ async function handleEvent(
                 console.error('Failed immediate delivery for scenario', scenario.id, err);
               }
             }
-          }
         } catch (err) {
           console.error('Failed to enroll friend in scenario', scenario.id, err);
         }

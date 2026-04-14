@@ -6,23 +6,44 @@
  * We extract this token and match friends across accounts to auto-tag duplicates.
  */
 
-const TAG_IDS: Record<string, string> = {
-  'c74fe38a-59cd-9a17-27d1-06a559c515a5': 'tag-dup-xh1',   // X Harness 1
-  '9a4971ed-6e6b-482a-8fb9-76c2d299e2d4': 'tag-dup-l1',    // L Harness ①
-  '90182a69-f296-4dfc-b889-39db4157f69a': 'tag-dup-l1b',   // L Harness ①b
-  '99354983-3437-4fb2-bf86-eada3c8c1233': 'tag-dup-l2',    // L Harness ②
-};
+/**
+ * Map of line_account_id → duplicate tag ID.
+ * Loaded from DB (account_settings key='duplicate_tag_mapping') at runtime.
+ * Fallback to empty if not configured.
+ */
+let cachedTagIds: Record<string, string> | null = null;
 
-const TAG_NAMES: Record<string, { name: string; color: string }> = {
-  'tag-dup-xh1': { name: '重複:XH1', color: '#8B5CF6' },
-  'tag-dup-l1':  { name: '重複:①', color: '#EF4444' },
-  'tag-dup-l1b': { name: '重複:①b', color: '#F97316' },
-  'tag-dup-l2':  { name: '重複:②', color: '#3B82F6' },
-};
+async function getTagIds(db: D1Database): Promise<Record<string, string>> {
+  if (cachedTagIds) return cachedTagIds;
+  const row = await db.prepare(
+    `SELECT value FROM account_settings WHERE line_account_id = 'system' AND key = 'duplicate_tag_mapping'`
+  ).first<{ value: string }>();
+  const result: Record<string, string> = row ? JSON.parse(row.value) : {};
+  cachedTagIds = result;
+  return result;
+}
+
+/**
+ * Tag names/colors loaded from DB (account_settings key='duplicate_tag_names').
+ * Format: { "tag-dup-xh1": { "name": "重複:XH1", "color": "#8B5CF6" }, ... }
+ */
+let cachedTagNames: Record<string, { name: string; color: string }> | null = null;
+
+async function getTagNames(db: D1Database): Promise<Record<string, { name: string; color: string }>> {
+  if (cachedTagNames) return cachedTagNames;
+  const row = await db.prepare(
+    `SELECT value FROM account_settings WHERE line_account_id = 'system' AND key = 'duplicate_tag_names'`
+  ).first<{ value: string }>();
+  const result: Record<string, { name: string; color: string }> = row ? JSON.parse(row.value) : {};
+  cachedTagNames = result;
+  return result;
+}
 
 async function ensureTags(db: D1Database): Promise<void> {
+  const tagNames = await getTagNames(db);
+  if (Object.keys(tagNames).length === 0) return;
   const now = new Date(Date.now() + 9 * 60 * 60_000).toISOString().replace('Z', '+09:00');
-  for (const [id, { name, color }] of Object.entries(TAG_NAMES)) {
+  for (const [id, { name, color }] of Object.entries(tagNames)) {
     await db.prepare(
       `INSERT OR IGNORE INTO tags (id, name, color, created_at) VALUES (?, ?, ?, ?)`
     ).bind(id, name, color, now).run();
@@ -42,6 +63,13 @@ const URL_TOKEN_SQL = `
  * Runs incrementally — only processes friends updated since last run.
  */
 export async function processDuplicateDetection(db: D1Database): Promise<void> {
+  // Load tag mapping from DB
+  const tagIds = await getTagIds(db);
+  if (Object.keys(tagIds).length === 0) {
+    // No mapping configured — skip duplicate detection
+    return;
+  }
+
   // Ensure duplicate tags exist
   await ensureTags(db);
 
@@ -94,8 +122,8 @@ export async function processDuplicateDetection(db: D1Database): Promise<void> {
     const now = new Date(Date.now() + 9 * 60 * 60_000).toISOString().replace('Z', '+09:00');
 
     for (const match of matches.results) {
-      const matchTagId = TAG_IDS[match.line_account_id];
-      const friendTagId = TAG_IDS[friend.line_account_id];
+      const matchTagId = tagIds[match.line_account_id];
+      const friendTagId = tagIds[friend.line_account_id];
 
       // Tag friend with the match's account tag (e.g., "重複:①")
       if (matchTagId) {

@@ -316,6 +316,9 @@ scenarios.post('/api/scenarios/:id/enroll/:friendId', async (c) => {
     }
 
     const enrollment = await enrollFriendInScenario(db, friendId, scenarioId);
+    if (!enrollment) {
+      return c.json({ success: false, error: 'Already enrolled in this scenario' }, 409);
+    }
     return c.json({ success: true, data: serializeFriendScenario(enrollment) }, 201);
   } catch (err) {
     console.error('POST /api/scenarios/:id/enroll/:friendId error:', err);

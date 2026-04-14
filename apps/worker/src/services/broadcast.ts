@@ -87,17 +87,14 @@ export async function processBroadcastSend(
           await lineClient.multicast(lineUserIds, [batchMessage], [unit]);
           successCount += batch.length;
 
-          // Log only successfully sent messages
-          for (const friend of batch) {
-            const logId = crypto.randomUUID();
-            await db
-              .prepare(
-                `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
-                 VALUES (?, ?, 'outgoing', ?, ?, ?, NULL, ?)`,
-              )
-              .bind(logId, friend.id, broadcast.message_type, broadcast.message_content, broadcastId, now)
-              .run();
-          }
+          // Log only successfully sent messages (batch insert for performance)
+          const logStmts = batch.map(friend =>
+            db.prepare(
+              `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
+               VALUES (?, ?, 'outgoing', ?, ?, ?, NULL, ?)`,
+            ).bind(crypto.randomUUID(), friend.id, broadcast.message_type, broadcast.message_content, broadcastId, now),
+          );
+          await db.batch(logStmts);
         } catch (err) {
           console.error(`Multicast batch ${i / MULTICAST_BATCH_SIZE} failed:`, err);
           // Continue with next batch; failed batch is not logged
@@ -122,7 +119,6 @@ export async function processScheduledBroadcasts(
   lineClient: LineClient,
   workerUrl?: string,
 ): Promise<void> {
-  const now = jstNow();
   const allBroadcasts = await getBroadcasts(db);
 
   const nowMs = Date.now();
@@ -135,10 +131,35 @@ export async function processScheduledBroadcasts(
 
   for (const broadcast of scheduled) {
     try {
-      await processBroadcastSend(db, lineClient, broadcast.id, workerUrl);
+      // Optimistic lock: claim this broadcast (scheduled → sending)
+      const lockResult = await db
+        .prepare(`UPDATE broadcasts SET status = 'sending' WHERE id = ? AND status = 'scheduled'`)
+        .bind(broadcast.id)
+        .run();
+      if (!lockResult.meta.changes || lockResult.meta.changes === 0) continue;
+
+      // Resolve correct lineClient for this broadcast's account
+      let deliveryClient = lineClient;
+      const accountId = (broadcast as unknown as Record<string, unknown>).line_account_id as string | null;
+      if (accountId) {
+        const { getLineAccountById } = await import('@line-crm/db');
+        const account = await getLineAccountById(db, accountId);
+        if (account) {
+          const { LineClient: LC } = await import('@line-crm/line-sdk');
+          deliveryClient = new LC(account.channel_access_token);
+        }
+      }
+
+      await processBroadcastSend(db, deliveryClient, broadcast.id, workerUrl);
     } catch (err) {
       console.error(`Failed to send scheduled broadcast ${broadcast.id}:`, err);
-      // Continue with next broadcast
+      // Reset to scheduled so it can be retried next cron
+      try {
+        await db.prepare(`UPDATE broadcasts SET status = 'scheduled' WHERE id = ? AND status = 'sending'`)
+          .bind(broadcast.id).run();
+      } catch (resetErr) {
+        console.error(`Failed to reset broadcast ${broadcast.id} status:`, resetErr);
+      }
     }
   }
 }

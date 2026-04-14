@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS friend_scenarios (
   friend_id          TEXT NOT NULL REFERENCES friends (id) ON DELETE CASCADE,
   scenario_id        TEXT NOT NULL REFERENCES scenarios (id) ON DELETE CASCADE,
   current_step_order INTEGER NOT NULL DEFAULT 0,
-  status             TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed')) DEFAULT 'active',
+  status             TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed', 'delivering')) DEFAULT 'active',
   started_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   next_delivery_at   TEXT,
   updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS friend_scenarios (
 CREATE INDEX IF NOT EXISTS idx_friend_scenarios_next_delivery_at ON friend_scenarios (next_delivery_at);
 CREATE INDEX IF NOT EXISTS idx_friend_scenarios_status ON friend_scenarios (status);
 CREATE INDEX IF NOT EXISTS idx_friend_scenarios_friend_id ON friend_scenarios (friend_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_scenarios_unique ON friend_scenarios (friend_id, scenario_id) WHERE status != 'completed';
 
 -- ============================================================
 -- Broadcasts

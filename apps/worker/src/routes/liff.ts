@@ -610,13 +610,8 @@ liffRoutes.get('/auth/callback', async (c) => {
       for (const scenario of scenarios) {
         const scenarioAccountMatch = !scenario.line_account_id || !matchedAccountId || scenario.line_account_id === matchedAccountId;
         if (scenario.trigger_type === 'friend_add' && scenario.is_active && scenarioAccountMatch) {
-          const existing = await db
-            .prepare('SELECT id FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ?')
-            .bind(friend.id, scenario.id)
-            .first<{ id: string }>();
-          if (!existing) {
-            await enroll(db, friend.id, scenario.id);
-
+          const enrollment = await enroll(db, friend.id, scenario.id);
+          if (enrollment) {
             // Immediate delivery of first step (skip delivery window)
             const steps = await getScenarioSteps(db, scenario.id);
             const firstStep = steps[0];

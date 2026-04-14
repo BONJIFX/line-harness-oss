@@ -306,7 +306,7 @@ export async function enrollFriendInScenario(
   db: D1Database,
   friendId: string,
   scenarioId: string,
-): Promise<FriendScenario> {
+): Promise<FriendScenario | null> {
   const id = crypto.randomUUID();
   const now = jstNow();
 
@@ -320,13 +320,15 @@ export async function enrollFriendInScenario(
 
   // A scenario with no steps is immediately completed — no stuck active enrollment.
   if (!firstStep) {
-    await db
+    const result = await db
       .prepare(
-        `INSERT INTO friend_scenarios (id, friend_id, scenario_id, current_step_order, status, started_at, next_delivery_at, updated_at)
+        `INSERT OR IGNORE INTO friend_scenarios (id, friend_id, scenario_id, current_step_order, status, started_at, next_delivery_at, updated_at)
          VALUES (?, ?, ?, 0, 'completed', ?, NULL, ?)`,
       )
       .bind(id, friendId, scenarioId, now, now)
       .run();
+
+    if (!result.meta.changes || result.meta.changes === 0) return null;
 
     return (await db
       .prepare(`SELECT * FROM friend_scenarios WHERE id = ?`)
@@ -343,13 +345,15 @@ export async function enrollFriendInScenario(
   }
   const nextDeliveryAt = rawDate.toISOString().slice(0, -1) + '+09:00';
 
-  await db
+  const result = await db
     .prepare(
-      `INSERT INTO friend_scenarios (id, friend_id, scenario_id, current_step_order, status, started_at, next_delivery_at, updated_at)
+      `INSERT OR IGNORE INTO friend_scenarios (id, friend_id, scenario_id, current_step_order, status, started_at, next_delivery_at, updated_at)
        VALUES (?, ?, ?, 0, 'active', ?, ?, ?)`,
     )
     .bind(id, friendId, scenarioId, now, nextDeliveryAt, now)
     .run();
+
+  if (!result.meta.changes || result.meta.changes === 0) return null;
 
   return (await db
     .prepare(`SELECT * FROM friend_scenarios WHERE id = ?`)
@@ -378,6 +382,44 @@ export async function getFriendScenariosDueForDelivery(
     .sort((a, b) => new Date(a.next_delivery_at!).getTime() - new Date(b.next_delivery_at!).getTime());
 }
 
+/**
+ * Optimistic lock: claim a friend_scenario for delivery.
+ * Only succeeds if status='active' and current_step_order matches.
+ * Returns true if claimed, false if another worker already processed it.
+ */
+export async function claimFriendScenarioForDelivery(
+  db: D1Database,
+  id: string,
+  expectedStepOrder: number,
+): Promise<boolean> {
+  const now = jstNow();
+  const result = await db
+    .prepare(
+      `UPDATE friend_scenarios
+       SET status = 'delivering', updated_at = ?
+       WHERE id = ? AND status = 'active' AND current_step_order = ?`,
+    )
+    .bind(now, id, expectedStepOrder)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Crash recovery: reset friend_scenarios stuck in 'delivering' for over 5 minutes back to 'active'.
+ */
+export async function recoverStuckDeliveries(db: D1Database): Promise<number> {
+  const fiveMinAgo = new Date(Date.now() + 9 * 60 * 60_000 - 5 * 60_000);
+  const threshold = fiveMinAgo.toISOString().slice(0, -1) + '+09:00';
+  const result = await db
+    .prepare(
+      `UPDATE friend_scenarios SET status = 'active', updated_at = ?
+       WHERE status = 'delivering' AND updated_at < ?`,
+    )
+    .bind(jstNow(), threshold)
+    .run();
+  return result.meta.changes ?? 0;
+}
+
 export async function advanceFriendScenario(
   db: D1Database,
   id: string,
@@ -390,6 +432,7 @@ export async function advanceFriendScenario(
       `UPDATE friend_scenarios
        SET current_step_order = ?,
            next_delivery_at = ?,
+           status = 'active',
            updated_at = ?
        WHERE id = ?`,
     )

@@ -12,7 +12,7 @@ interface TestSendSectionProps {
 export default function TestSendSection({ broadcastId, accountId, disabled }: TestSendSectionProps) {
   const [recipients, setRecipients] = useState<Array<{ id: string; displayName: string; pictureUrl: string | null }>>([])
   const [sending, setSending] = useState(false)
-  const [result, setResult] = useState<{ sent: number; failed: number; at: string } | null>(null)
+  const [result, setResult] = useState<{ sent: number; failed: number; at: string; error?: boolean } | null>(null)
   const [cooldown, setCooldown] = useState(false)
 
   useEffect(() => {
@@ -34,8 +34,9 @@ export default function TestSendSection({ broadcastId, accountId, disabled }: Te
         setCooldown(true)
         setTimeout(() => setCooldown(false), 10000)
       }
-    } catch { /* ignore */ }
-    finally { setSending(false) }
+    } catch {
+      setResult({ sent: 0, failed: 0, at: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }), error: true })
+    } finally { setSending(false) }
   }
 
   return (
@@ -61,8 +62,10 @@ export default function TestSendSection({ broadcastId, accountId, disabled }: Te
             {sending ? 'テスト送信中...' : cooldown ? '送信済み' : 'テスト送信する'}
           </button>
           {result && (
-            <p className="text-xs text-green-600 mt-2">
-              {result.at} テスト送信済み ({result.sent}名成功{result.failed > 0 ? `, ${result.failed}名失敗` : ''})
+            <p className={`text-xs mt-2 ${result.error ? 'text-red-600' : 'text-green-600'}`}>
+              {result.error
+                ? `${result.at} テスト送信に失敗しました`
+                : `${result.at} テスト送信済み (${result.sent}名成功${result.failed > 0 ? `, ${result.failed}名失敗` : ''})`}
             </p>
           )}
         </>

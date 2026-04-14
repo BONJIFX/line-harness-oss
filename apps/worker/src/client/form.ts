@@ -1031,6 +1031,8 @@ function attachXAutocomplete(): void {
         }
       }
     } catch {
+      // Hide stale gate condition rows before showing the error message
+      hideConditions();
       // Show helpful message on verify error (e.g. X API down)
       if (conditionsResult) {
         conditionsResult.innerHTML = '⚠️ 確認中にエラーが発生しました<br><span style="font-size:11px;font-weight:normal">しばらく待ってからもう一度お試しください</span>';

@@ -4,6 +4,7 @@ import {
   getScenarioSteps,
   advanceFriendScenario,
   completeFriendScenario,
+  claimFriendScenarioForDelivery,
   getFriendById,
   jstNow,
 } from '@line-crm/db';
@@ -108,6 +109,8 @@ function enforceDeliveryWindow(date: Date, preferredHour?: number): Date {
   return result;
 }
 
+const MAX_SENDS_PER_CRON = 40; // CF Free plan: 50 subrequests limit (margin for other jobs)
+
 export async function processStepDeliveries(
   db: D1Database,
   lineClient: LineClient,
@@ -120,14 +123,17 @@ export async function processStepDeliveries(
   const now = jstNow();
   const dueFriendScenarios = await getFriendScenariosDueForDelivery(db, now);
 
+  let sendCount = 0;
   for (let i = 0; i < dueFriendScenarios.length; i++) {
+    if (sendCount >= MAX_SENDS_PER_CRON) break;
     const fs = dueFriendScenarios[i];
     try {
       // Stealth: add small random delay between deliveries to avoid burst patterns
       if (i > 0) {
         await sleep(addJitter(50, 200));
       }
-      await processSingleDelivery(db, lineClient, fs, workerUrl);
+      const sent = await processSingleDelivery(db, lineClient, fs, workerUrl);
+      if (sent) sendCount++;
     } catch (err) {
       console.error(`Error processing friend_scenario ${fs.id}:`, err);
       // Continue with next one
@@ -147,12 +153,16 @@ async function processSingleDelivery(
     next_delivery_at: string | null;
   },
   workerUrl?: string,
-): Promise<void> {
+): Promise<boolean> {
+  // Optimistic lock: claim this delivery (prevents duplicate sends from parallel workers)
+  const claimed = await claimFriendScenarioForDelivery(db, fs.id, fs.current_step_order);
+  if (!claimed) return false;
+
   // Get friend first to read preferred delivery hour from metadata
   const friend = await getFriendById(db, fs.friend_id);
   if (!friend || !friend.is_following) {
     await completeFriendScenario(db, fs.id);
-    return;
+    return false;
   }
   const metadata = JSON.parse((friend as { metadata?: string }).metadata || '{}') as Record<string, unknown>;
   const preferredHour = typeof metadata.preferred_hour === 'number' ? metadata.preferred_hour : undefined;
@@ -161,7 +171,7 @@ async function processSingleDelivery(
   const steps = await getScenarioSteps(db, fs.scenario_id);
   if (steps.length === 0) {
     await completeFriendScenario(db, fs.id);
-    return;
+    return false;
   }
 
   // Steps are sorted by step_order but may not be contiguous (e.g., 1, 3, 5 after deletions).
@@ -170,7 +180,7 @@ async function processSingleDelivery(
 
   if (!currentStep) {
     await completeFriendScenario(db, fs.id);
-    return;
+    return false;
   }
 
   // Check step condition before sending
@@ -185,7 +195,7 @@ async function processSingleDelivery(
           const windowedDate = enforceDeliveryWindow(nextDate, preferredHour);
           const jitteredDate = jitterDeliveryTime(windowedDate);
           await advanceFriendScenario(db, fs.id, currentStep.step_order, jitteredDate.toISOString().slice(0, -1) + '+09:00');
-          return;
+          return false;
         }
       }
       const nextIndex = steps.indexOf(currentStep) + 1;
@@ -199,7 +209,7 @@ async function processSingleDelivery(
       } else {
         await completeFriendScenario(db, fs.id);
       }
-      return;
+      return false;
     }
   }
 
@@ -255,6 +265,7 @@ async function processSingleDelivery(
     // This was the last step
     await completeFriendScenario(db, fs.id);
   }
+  return true;
 }
 
 async function evaluateCondition(
