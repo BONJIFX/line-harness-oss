@@ -10,13 +10,13 @@ const valueOf = (name, fallback = '') => {
 
 const baseUrl = (process.env.LINE_HARNESS_URL || 'https://csa-line-harness.paison0357.workers.dev').replace(/\/$/, '');
 const apiKey = process.env.LINE_HARNESS_API_KEY || process.env.API_KEY;
-const title = valueOf('--title', `CSA興味確認 ${new Date().toISOString().slice(0, 10)}`);
+const title = valueOf('--title', `CSAご案内整理 ${new Date().toISOString().slice(0, 10)}`);
 const createDraft = has('--create-draft');
 const sendNow = has('--send-now');
 const sendId = valueOf('--send-id', '');
 const confirmSend = valueOf('--confirm-send', '');
 
-const altText = '今後のご案内について、興味に近い項目を1つ選んでください。';
+const altText = 'Candle Smart Academyからご案内整理のお願いです。1つだけ選んでください。';
 
 const flex = {
   type: 'bubble',
@@ -36,7 +36,7 @@ const flex = {
       },
       {
         type: 'text',
-        text: '今の興味に近いものを選んでください',
+        text: 'ご案内整理のお願いです',
         size: 'lg',
         weight: 'bold',
         color: '#ffffff',
@@ -60,10 +60,18 @@ const flex = {
     contents: [
       {
         type: 'text',
-        text: '今後のご案内を、必要な方へ必要な内容でお届けするための確認です。',
+        text: 'こんにちは、Candle Smart Academyです。これまでセミナーや学習案内などでつながってくださった方へ、今後のご案内を整理しています。',
         size: 'sm',
         color: '#334155',
         wrap: true,
+      },
+      {
+        type: 'text',
+        text: '必要な内容だけお届けしたいので、今の状況に近いものを1つだけ選んでください。案内不要も選べます。',
+        size: 'sm',
+        color: '#334155',
+        wrap: true,
+        margin: 'sm',
       },
       {
         type: 'button',
