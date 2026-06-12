@@ -48,6 +48,7 @@ const CSA_INTEREST_SEGMENTS: Record<string, { label: string; tag: string; color:
     reply: '承知しました。\n今後のご案内を控えさせていただきます。',
   },
 };
+const CSA_INTEREST_TAG_NAMES = Object.values(CSA_INTEREST_SEGMENTS).map((segment) => segment.tag);
 
 webhook.post('/webhook', async (c) => {
   const rawBody = await c.req.text();
@@ -558,6 +559,18 @@ async function handleCsaInterestPostback(
 
   const selectedAt = jstNow();
   const metadata = JSON.parse(friend.metadata || '{}');
+  const previousHistory = Array.isArray(metadata.interest_segment_history)
+    ? metadata.interest_segment_history
+    : [];
+  metadata.interest_segment_history = [
+    ...previousHistory,
+    {
+      segment,
+      label: config.label,
+      selected_at: selectedAt,
+      source: 'csa_interest_recovery_broadcast',
+    },
+  ].slice(-20);
   metadata.interest_segment = segment;
   metadata.interest_segment_label = config.label;
   metadata.interest_segment_selected_at = selectedAt;
@@ -571,6 +584,7 @@ async function handleCsaInterestPostback(
     .bind(JSON.stringify(metadata), selectedAt, friend.id)
     .run();
 
+  await removeCsaInterestTags(db, friend.id);
   const tag = await getOrCreateTag(db, config.tag, config.color);
   await addTagToFriend(db, friend.id, tag.id);
 
@@ -586,6 +600,20 @@ async function handleCsaInterestPostback(
   await lineClient.replyMessage(event.replyToken, [
     buildMessage('text', config.reply),
   ]);
+}
+
+async function removeCsaInterestTags(db: D1Database, friendId: string): Promise<void> {
+  if (CSA_INTEREST_TAG_NAMES.length === 0) return;
+
+  const placeholders = CSA_INTEREST_TAG_NAMES.map(() => '?').join(', ');
+  await db
+    .prepare(
+      `DELETE FROM friend_tags
+       WHERE friend_id = ?
+       AND tag_id IN (SELECT id FROM tags WHERE name IN (${placeholders}))`,
+    )
+    .bind(friendId, ...CSA_INTEREST_TAG_NAMES)
+    .run();
 }
 
 async function getOrCreateTag(
