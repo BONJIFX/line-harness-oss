@@ -149,6 +149,11 @@ export interface UserProfile {
   statusMessage?: string;
 }
 
+export interface FollowersIdsResponse {
+  userIds: string[];
+  next?: string;
+}
+
 // ─── Send message types ───────────────────────────────────────────────────────
 
 export type FlexContainer = object;

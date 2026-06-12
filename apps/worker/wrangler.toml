@@ -1,13 +1,13 @@
-name = "line-harness"
+name = "csa-line-harness"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 workers_dev = true
 
 # ═══════════════════════════════════════════════════════════════
-# デフォルト = テスト環境 (noda@)
+# CSA 環境 (paison0357@gmail.com)
 # 使い方: npx wrangler deploy
 # ═══════════════════════════════════════════════════════════════
-account_id = "YOUR_DEV_ACCOUNT_ID"
+account_id = "00af307b3e516ed14ba6b2a886304412"
 
 [assets]
 directory = "dist/client"
@@ -15,12 +15,12 @@ binding = "ASSETS"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "line-harness"
-database_id = "YOUR_DEV_D1_DATABASE_ID"
+database_name = "csa-line-harness"
+database_id = "ae45eb8c-c543-40ec-be7a-01a9f27bccfd"
 
 [[r2_buckets]]
 binding = "IMAGES"
-bucket_name = "line-harness-images"
+bucket_name = "csa-line-harness-images"
 
 [triggers]
 crons = ["*/5 * * * *"]

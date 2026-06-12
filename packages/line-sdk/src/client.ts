@@ -1,6 +1,7 @@
 import type {
   BroadcastRequest,
   FlexContainer,
+  FollowersIdsResponse,
   Message,
   MulticastRequest,
   PushMessageRequest,
@@ -39,9 +40,9 @@ export class LineClient {
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(
+      throw Object.assign(new Error(
         `LINE API error: ${res.status} ${res.statusText} — ${text}`,
-      );
+      ), { status: res.status, statusText: res.statusText, body: text });
     }
 
     // Some endpoints (e.g. push, reply) return an empty body with 200.
@@ -64,6 +65,18 @@ export class LineClient {
       `/v2/bot/profile/${encodeURIComponent(userId)}`,
     );
     return data as UserProfile;
+  }
+
+  async getFollowerIds(options: { start?: string; limit?: number } = {}): Promise<FollowersIdsResponse> {
+    const params = new URLSearchParams();
+    if (options.start) params.set('start', options.start);
+    if (options.limit) params.set('limit', String(options.limit));
+    const query = params.toString();
+    const { data } = await this.request(
+      'GET',
+      `/v2/bot/followers/ids${query ? `?${query}` : ''}`,
+    );
+    return data as FollowersIdsResponse;
   }
 
   // ─── Messaging ───────────────────────────────────────────────────────────

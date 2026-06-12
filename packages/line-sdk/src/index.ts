@@ -27,6 +27,7 @@ export type {
   FileEventMessage,
   FlexContainer,
   FlexMessage,
+  FollowersIdsResponse,
   FollowEvent,
   GroupSource,
   ImageEventMessage,

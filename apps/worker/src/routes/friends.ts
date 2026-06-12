@@ -1,8 +1,9 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import {
   getFriends,
   getFriendById,
   getFriendCount,
+  getLineAccountById,
   addTagToFriend,
   removeTagFromFriend,
   getFriendTags,
@@ -11,11 +12,170 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
+import { LineClient } from '@line-crm/line-sdk';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
 
 const friends = new Hono<Env>();
+
+const FOLLOWER_IMPORT_SOURCE = 'line_followers_import';
+const DEFAULT_FOLLOWER_PAGE_LIMIT = 1000;
+const MAX_FOLLOWER_PAGE_LIMIT = 1000;
+const DEFAULT_PROFILE_ENRICH_LIMIT = 50;
+const MAX_PROFILE_ENRICH_LIMIT = 100;
+const UPSERT_CHUNK_SIZE = 100;
+
+type LineApiError = Error & { status?: number; body?: string };
+type ImportFollowersBody = {
+  lineAccountId?: string | null;
+  start?: string | null;
+  pageLimit?: number;
+  maxPages?: number;
+  maxUsers?: number;
+  dryRun?: boolean;
+};
+type EnrichProfilesBody = {
+  lineAccountId?: string | null;
+  limit?: number;
+  onlyMissingName?: boolean;
+  dryRun?: boolean;
+};
+
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function toBoundedInt(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+}
+
+function requireImportRole(c: Context<Env>) {
+  const staff = c.get('staff');
+  if (staff?.role !== 'owner' && staff?.role !== 'admin') {
+    return c.json({ success: false, error: 'Owner or admin role is required' }, 403);
+  }
+  return null;
+}
+
+async function resolveLineClient(
+  c: Context<Env>,
+  lineAccountId?: string | null,
+): Promise<{ lineClient: LineClient; lineAccountId: string | null; source: 'line_account' | 'env' }> {
+  if (lineAccountId) {
+    const account = await getLineAccountById(c.env.DB, lineAccountId);
+    if (!account) {
+      throw Object.assign(new Error('LINE account not found'), { status: 404 });
+    }
+    return {
+      lineClient: new LineClient(account.channel_access_token),
+      lineAccountId,
+      source: 'line_account',
+    };
+  }
+
+  if (!c.env.LINE_CHANNEL_ACCESS_TOKEN) {
+    throw Object.assign(new Error('LINE_CHANNEL_ACCESS_TOKEN is not configured'), { status: 500 });
+  }
+
+  return {
+    lineClient: new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN),
+    lineAccountId: null,
+    source: 'env',
+  };
+}
+
+function lineApiErrorResponse(c: Context<Env>, err: unknown) {
+  const lineErr = err as LineApiError;
+  const parsedStatus = lineErr?.status
+    ?? Number(lineErr?.message?.match(/LINE API error:\s*(\d{3})/)?.[1] ?? 0)
+    ?? undefined;
+
+  if (parsedStatus === 403) {
+    return c.json({
+      success: false,
+      error: 'LINE followers API returned 403. The Official Account must be verified or premium to fetch all follower IDs.',
+      reason: 'verified_or_premium_required',
+      detail: lineErr.body ?? lineErr.message,
+    }, 403);
+  }
+  if (parsedStatus === 404) {
+    return c.json({ success: false, error: lineErr.message }, 404);
+  }
+  return c.json({ success: false, error: lineErr?.message ?? 'Internal server error' }, 500);
+}
+
+async function upsertFollowerIds(
+  db: D1Database,
+  lineUserIds: string[],
+  lineAccountId: string | null,
+  importedAt: string,
+): Promise<{ created: number; updated: number }> {
+  let created = 0;
+  let updated = 0;
+
+  const metadata = JSON.stringify({
+    line_followers_import_source: FOLLOWER_IMPORT_SOURCE,
+    line_followers_imported_at: importedAt,
+    line_followers_import_account_id: lineAccountId,
+  });
+
+  for (let i = 0; i < lineUserIds.length; i += UPSERT_CHUNK_SIZE) {
+    const chunk = lineUserIds.slice(i, i + UPSERT_CHUNK_SIZE);
+    if (chunk.length === 0) continue;
+
+    const placeholders = chunk.map(() => '?').join(',');
+    const existingRow = await db
+      .prepare(`SELECT COUNT(*) as count FROM friends WHERE line_user_id IN (${placeholders})`)
+      .bind(...chunk)
+      .first<{ count: number }>();
+    const existingCount = existingRow?.count ?? 0;
+    created += chunk.length - existingCount;
+    updated += existingCount;
+
+    const now = importedAt;
+    const statements = chunk.map((lineUserId) => db
+      .prepare(
+        `INSERT INTO friends (id, line_user_id, is_following, line_account_id, metadata, created_at, updated_at)
+         VALUES (?, ?, 1, ?, ?, ?, ?)
+         ON CONFLICT(line_user_id) DO UPDATE SET
+           is_following = 1,
+           line_account_id = COALESCE(friends.line_account_id, excluded.line_account_id),
+           metadata = json_patch(COALESCE(NULLIF(friends.metadata, ''), '{}'), excluded.metadata),
+           updated_at = excluded.updated_at`,
+      )
+      .bind(crypto.randomUUID(), lineUserId, lineAccountId, metadata, now, now));
+
+    await db.batch(statements);
+  }
+
+  return { created, updated };
+}
+
+async function getFollowerIds(
+  lineClient: LineClient,
+  options: { start?: string; limit?: number },
+): Promise<{ userIds: string[]; next?: string }> {
+  const params = new URLSearchParams();
+  if (options.start) params.set('start', options.start);
+  if (options.limit) params.set('limit', String(options.limit));
+  const query = params.toString();
+  const { data } = await lineClient.request(
+    'GET',
+    `/v2/bot/followers/ids${query ? `?${query}` : ''}`,
+  );
+  return data as { userIds: string[]; next?: string };
+}
 
 /** Convert a D1 snake_case Friend row to the shared camelCase shape */
 function serializeFriend(row: DbFriend) {
@@ -132,6 +292,221 @@ friends.get('/api/friends/count', async (c) => {
   } catch (err) {
     console.error('GET /api/friends/count error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/friends/import-followers - import all current LINE follower IDs
+friends.post('/api/friends/import-followers', async (c) => {
+  const roleError = requireImportRole(c);
+  if (roleError) return roleError;
+
+  try {
+    const body = await c.req.json<ImportFollowersBody>().catch(() => ({} as ImportFollowersBody));
+
+    const pageLimit = toBoundedInt(
+      body.pageLimit,
+      DEFAULT_FOLLOWER_PAGE_LIMIT,
+      1,
+      MAX_FOLLOWER_PAGE_LIMIT,
+    );
+    const maxPages = toBoundedInt(body.maxPages, 100, 1, 500);
+    const maxUsers = body.maxUsers == null
+      ? null
+      : toBoundedInt(body.maxUsers, 1, 1, 100_000);
+    const dryRun = Boolean(body.dryRun);
+    const initialStart = typeof body.start === 'string' && body.start.length > 0
+      ? body.start
+      : undefined;
+
+    const { lineClient, lineAccountId, source } = await resolveLineClient(c, body.lineAccountId ?? null);
+    const importedAt = jstNow();
+    const importedIds = new Set<string>();
+    let start = initialStart;
+    let next: string | undefined;
+    let pages = 0;
+    let created = 0;
+    let updated = 0;
+
+    do {
+      const response = await getFollowerIds(lineClient, { start, limit: pageLimit });
+      pages += 1;
+      next = response.next;
+
+      const remaining = maxUsers == null ? response.userIds.length : maxUsers - importedIds.size;
+      const ids = response.userIds.slice(0, Math.max(remaining, 0));
+      for (const id of ids) importedIds.add(id);
+
+      if (!dryRun && ids.length > 0) {
+        const result = await upsertFollowerIds(c.env.DB, ids, lineAccountId, importedAt);
+        created += result.created;
+        updated += result.updated;
+      }
+
+      if (maxUsers != null && importedIds.size >= maxUsers) break;
+      start = next;
+    } while (next && pages < maxPages);
+
+    const stoppedByMaxPages = Boolean(next) && pages >= maxPages;
+    const stoppedByMaxUsers = maxUsers != null && importedIds.size >= maxUsers;
+
+    return c.json({
+      success: true,
+      data: {
+        dryRun,
+        source,
+        lineAccountId,
+        fetched: importedIds.size,
+        created,
+        updated,
+        pages,
+        pageLimit,
+        next: next ?? null,
+        completed: !next || stoppedByMaxUsers,
+        stoppedByMaxPages,
+        stoppedByMaxUsers,
+        importedAt,
+      },
+    });
+  } catch (err) {
+    console.error('POST /api/friends/import-followers error:', err);
+    return lineApiErrorResponse(c, err);
+  }
+});
+
+// POST /api/friends/enrich-profiles - fill display names in small safe batches
+friends.post('/api/friends/enrich-profiles', async (c) => {
+  const roleError = requireImportRole(c);
+  if (roleError) return roleError;
+
+  try {
+    const body = await c.req.json<EnrichProfilesBody>().catch(() => ({} as EnrichProfilesBody));
+
+    const limit = toBoundedInt(
+      body.limit,
+      DEFAULT_PROFILE_ENRICH_LIMIT,
+      1,
+      MAX_PROFILE_ENRICH_LIMIT,
+    );
+    const onlyMissingName = body.onlyMissingName !== false;
+    const dryRun = Boolean(body.dryRun);
+    const { lineClient, lineAccountId, source } = await resolveLineClient(c, body.lineAccountId ?? null);
+
+    const conditions = ['is_following = 1'];
+    const binds: unknown[] = [];
+    if (lineAccountId) {
+      conditions.push('line_account_id = ?');
+      binds.push(lineAccountId);
+    }
+    if (onlyMissingName) {
+      conditions.push('(display_name IS NULL OR display_name = \'\')');
+    }
+
+    const result = await c.env.DB
+      .prepare(
+        `SELECT * FROM friends
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY updated_at ASC
+         LIMIT ?`,
+      )
+      .bind(...binds, limit)
+      .all<DbFriend>();
+
+    let enriched = 0;
+    let markedUnfollowed = 0;
+    const failed: Array<{ friendId: string; lineUserId: string; status?: number; message: string }> = [];
+    const enrichedAt = jstNow();
+
+    for (const friend of result.results) {
+      try {
+        const profile = await lineClient.getProfile(friend.line_user_id);
+        if (!dryRun) {
+          const existingMetadata = parseJsonObject(friend.metadata);
+          const metadata = JSON.stringify({
+            ...existingMetadata,
+            line_profile_enriched_at: enrichedAt,
+          });
+          await c.env.DB
+            .prepare(
+              `UPDATE friends
+               SET display_name = ?,
+                   picture_url = ?,
+                   status_message = ?,
+                   metadata = ?,
+                   updated_at = ?
+               WHERE id = ?`,
+            )
+            .bind(
+              profile.displayName ?? null,
+              profile.pictureUrl ?? null,
+              profile.statusMessage ?? null,
+              metadata,
+              enrichedAt,
+              friend.id,
+            )
+            .run();
+        }
+        enriched += 1;
+      } catch (err) {
+        const lineErr = err as LineApiError;
+        const status = lineErr.status
+          ?? Number(lineErr.message?.match(/LINE API error:\s*(\d{3})/)?.[1] ?? 0)
+          ?? undefined;
+        failed.push({
+          friendId: friend.id,
+          lineUserId: friend.line_user_id,
+          status,
+          message: lineErr.message,
+        });
+
+        if (!dryRun && (status === 403 || status === 404)) {
+          const existingMetadata = parseJsonObject(friend.metadata);
+          await c.env.DB
+            .prepare(
+              `UPDATE friends
+               SET is_following = 0,
+                   metadata = ?,
+                   updated_at = ?
+               WHERE id = ?`,
+            )
+            .bind(JSON.stringify({
+              ...existingMetadata,
+              line_profile_error_at: enrichedAt,
+              line_profile_error_status: status ?? null,
+            }), enrichedAt, friend.id)
+            .run();
+          markedUnfollowed += 1;
+        }
+      }
+    }
+
+    const remainingRow = await c.env.DB
+      .prepare(
+        `SELECT COUNT(*) as count FROM friends
+         WHERE is_following = 1
+           ${lineAccountId ? 'AND line_account_id = ?' : ''}
+           ${onlyMissingName ? 'AND (display_name IS NULL OR display_name = \'\')' : ''}`,
+      )
+      .bind(...(lineAccountId ? [lineAccountId] : []))
+      .first<{ count: number }>();
+
+    return c.json({
+      success: true,
+      data: {
+        dryRun,
+        source,
+        lineAccountId,
+        scanned: result.results.length,
+        enriched,
+        markedUnfollowed,
+        failedCount: failed.length,
+        failed: failed.slice(0, 10),
+        remaining: remainingRow?.count ?? 0,
+        enrichedAt,
+      },
+    });
+  } catch (err) {
+    console.error('POST /api/friends/enrich-profiles error:', err);
+    return lineApiErrorResponse(c, err);
   }
 });
 
@@ -319,11 +694,9 @@ friends.post('/api/friends/:id/messages', async (c) => {
       return c.json({ success: false, error: 'Friend not found' }, 404);
     }
 
-    const { LineClient } = await import('@line-crm/line-sdk');
     // Resolve access token from friend's account (multi-account support)
     let accessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
     if ((friend as unknown as Record<string, unknown>).line_account_id) {
-      const { getLineAccountById } = await import('@line-crm/db');
       const account = await getLineAccountById(db, (friend as unknown as Record<string, unknown>).line_account_id as string);
       if (account) accessToken = account.channel_access_token;
     }

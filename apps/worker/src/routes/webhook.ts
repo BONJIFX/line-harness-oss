@@ -241,9 +241,7 @@ async function handleEvent(
   // ここで早期 return することで、テキスト用の auto_reply / scenario 判定には進まない
   // （スタンプ単体に対するキーワードマッチは意味を持たないため）。inbox 抜けだけ防ぐ。
   if (event.type === 'message' && event.message.type !== 'text') {
-    const userId = event.source.type === 'user' ? event.source.userId : undefined;
-    if (!userId) return;
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await ensureFriendForIncomingMessage(db, lineClient, event, lineAccountId, 'non_text_message');
     if (!friend) return;
 
     const msg = event.message as { type: string; fileName?: string; title?: string };
@@ -273,7 +271,7 @@ async function handleEvent(
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await ensureFriendForIncomingMessage(db, lineClient, event, lineAccountId, 'message');
     if (!friend) return;
 
     const incomingText = textMessage.text;
@@ -455,6 +453,62 @@ async function handleEvent(
 
     return;
   }
+}
+
+async function ensureFriendForIncomingMessage(
+  db: D1Database,
+  lineClient: LineClient,
+  event: WebhookEvent,
+  lineAccountId: string | null,
+  source: 'message' | 'non_text_message',
+) {
+  const userId = event.source.type === 'user' ? event.source.userId : undefined;
+  if (!userId) return null;
+
+  const existing = await getFriendByLineUserId(db, userId);
+  const recoveredAt = jstNow();
+  if (existing) {
+    if (lineAccountId && !existing.line_account_id) {
+      const metadata = JSON.parse(existing.metadata || '{}');
+      metadata.line_existing_friend_seen_at = recoveredAt;
+      metadata.line_existing_friend_seen_source = source;
+      await db.prepare('UPDATE friends SET line_account_id = ?, metadata = ?, updated_at = ? WHERE id = ?')
+        .bind(lineAccountId, JSON.stringify(metadata), recoveredAt, existing.id)
+        .run();
+      return (await getFriendByLineUserId(db, userId)) ?? existing;
+    }
+    return existing;
+  }
+
+  let profile;
+  try {
+    profile = await lineClient.getProfile(userId);
+  } catch (err) {
+    console.error('Failed to get profile while recovering existing friend', userId, err);
+  }
+
+  const friend = await upsertFriend(db, {
+    lineUserId: userId,
+    displayName: profile?.displayName ?? null,
+    pictureUrl: profile?.pictureUrl ?? null,
+    statusMessage: profile?.statusMessage ?? null,
+  });
+
+  const metadata = JSON.parse(friend.metadata || '{}');
+  metadata.line_existing_friend_recovered_at = recoveredAt;
+  metadata.line_existing_friend_recovered_source = source;
+
+  if (lineAccountId) {
+    await db.prepare('UPDATE friends SET line_account_id = ?, metadata = ?, updated_at = ? WHERE id = ?')
+      .bind(lineAccountId, JSON.stringify(metadata), recoveredAt, friend.id)
+      .run();
+  } else {
+    await db.prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+      .bind(JSON.stringify(metadata), recoveredAt, friend.id)
+      .run();
+  }
+
+  return (await getFriendByLineUserId(db, userId)) ?? friend;
 }
 
 export { webhook };
