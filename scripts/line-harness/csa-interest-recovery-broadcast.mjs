@@ -60,7 +60,7 @@ const flex = {
     contents: [
       {
         type: 'text',
-        text: 'こんにちは、Candle Smart Academyです。これまでセミナーや学習案内などでつながってくださった方へ、今後のご案内を整理しています。',
+        text: 'こんにちは、BONJIです。これまでセミナーや学習案内などでつながってくださった方へ、今後のご案内を整理しています。',
         size: 'sm',
         color: '#334155',
         wrap: true,

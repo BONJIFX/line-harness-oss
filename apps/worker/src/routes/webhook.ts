@@ -45,7 +45,7 @@ const CSA_INTEREST_SEGMENTS: Record<string, { label: string; tag: string; color:
     label: '今後の案内は不要',
     tag: '配信停止希望',
     color: '#64748b',
-    reply: '承知しました。\n今後のご案内を控える分類にしました。',
+    reply: '承知しました。\n今後のご案内を控えさせていただきます。',
   },
 };
 
