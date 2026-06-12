@@ -5,6 +5,7 @@ import {
   upsertFriend,
   updateFriendFollowStatus,
   getFriendByLineUserId,
+  addTagToFriend,
   getScenarios,
   enrollFriendInScenario,
   getScenarioSteps,
@@ -19,6 +20,34 @@ import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
+
+const CSA_INTEREST_PREFIX = 'csa_interest:';
+const CSA_INTEREST_SEGMENTS: Record<string, { label: string; tag: string; color: string; reply: string }> = {
+  learn_candles: {
+    label: 'ローソク足・相場分析を学びたい',
+    tag: '興味: ローソク足',
+    color: '#f59e0b',
+    reply: 'ありがとうございます。\nローソク足・相場分析に関するご案内を優先してお届けします。',
+  },
+  seminar: {
+    label: '無料セミナーや勉強会の案内がほしい',
+    tag: '興味: 無料セミナー',
+    color: '#3b82f6',
+    reply: 'ありがとうございます。\n無料セミナーや勉強会のご案内を優先してお届けします。',
+  },
+  member_support: {
+    label: 'CSA受講中・購入済みなのでサポート案内がほしい',
+    tag: '区分: CSA受講・購入済み申告',
+    color: '#22c55e',
+    reply: 'ありがとうございます。\nCSA受講・購入済みの方向け案内として確認しました。必要に応じて個別に確認します。',
+  },
+  opt_out: {
+    label: '今後の案内は不要',
+    tag: '配信停止希望',
+    color: '#64748b',
+    reply: '承知しました。\n今後のご案内を控える分類にしました。',
+  },
+};
 
 webhook.post('/webhook', async (c) => {
   const rawBody = await c.req.text();
@@ -197,10 +226,15 @@ async function handleEvent(
     const userId = event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await ensureFriendForIncomingMessage(db, lineClient, event, lineAccountId, 'postback');
     if (!friend) return;
 
     const postbackData = (event as unknown as { postback: { data: string } }).postback.data;
+
+    if (postbackData.startsWith(CSA_INTEREST_PREFIX)) {
+      await handleCsaInterestPostback(db, lineClient, event, friend, postbackData);
+      return;
+    }
 
     // Match postback data against auto_replies (exact match on keyword)
     const autoReplyQuery = lineAccountId
@@ -460,7 +494,7 @@ async function ensureFriendForIncomingMessage(
   lineClient: LineClient,
   event: WebhookEvent,
   lineAccountId: string | null,
-  source: 'message' | 'non_text_message',
+  source: 'message' | 'non_text_message' | 'postback',
 ) {
   const userId = event.source.type === 'user' ? event.source.userId : undefined;
   if (!userId) return null;
@@ -509,6 +543,72 @@ async function ensureFriendForIncomingMessage(
   }
 
   return (await getFriendByLineUserId(db, userId)) ?? friend;
+}
+
+async function handleCsaInterestPostback(
+  db: D1Database,
+  lineClient: LineClient,
+  event: WebhookEvent,
+  friend: NonNullable<Awaited<ReturnType<typeof getFriendByLineUserId>>>,
+  postbackData: string,
+) {
+  const segment = postbackData.slice(CSA_INTEREST_PREFIX.length);
+  const config = CSA_INTEREST_SEGMENTS[segment];
+  if (!config || event.type !== 'postback') return;
+
+  const selectedAt = jstNow();
+  const metadata = JSON.parse(friend.metadata || '{}');
+  metadata.interest_segment = segment;
+  metadata.interest_segment_label = config.label;
+  metadata.interest_segment_selected_at = selectedAt;
+  metadata.interest_segment_source = 'csa_interest_recovery_broadcast';
+  if (segment === 'opt_out') {
+    metadata.line_opt_out_requested = true;
+    metadata.line_opt_out_requested_at = selectedAt;
+  }
+
+  await db.prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+    .bind(JSON.stringify(metadata), selectedAt, friend.id)
+    .run();
+
+  const tag = await getOrCreateTag(db, config.tag, config.color);
+  await addTagToFriend(db, friend.id, tag.id);
+
+  const logId = crypto.randomUUID();
+  await db
+    .prepare(
+      `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, created_at)
+       VALUES (?, ?, 'incoming', 'postback', ?, NULL, NULL, 'csa_interest_recovery', ?)`,
+    )
+    .bind(logId, friend.id, config.label, selectedAt)
+    .run();
+
+  await lineClient.replyMessage(event.replyToken, [
+    buildMessage('text', config.reply),
+  ]);
+}
+
+async function getOrCreateTag(
+  db: D1Database,
+  name: string,
+  color: string,
+): Promise<{ id: string; name: string; color: string }> {
+  const existing = await db
+    .prepare('SELECT id, name, color FROM tags WHERE name = ?')
+    .bind(name)
+    .first<{ id: string; name: string; color: string }>();
+  if (existing) return existing;
+
+  const id = crypto.randomUUID();
+  await db
+    .prepare('INSERT OR IGNORE INTO tags (id, name, color, created_at) VALUES (?, ?, ?, ?)')
+    .bind(id, name, color, jstNow())
+    .run();
+
+  return (await db
+    .prepare('SELECT id, name, color FROM tags WHERE name = ?')
+    .bind(name)
+    .first<{ id: string; name: string; color: string }>())!;
 }
 
 export { webhook };
