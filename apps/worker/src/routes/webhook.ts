@@ -578,6 +578,9 @@ async function handleCsaInterestPostback(
   if (segment === 'opt_out') {
     metadata.line_opt_out_requested = true;
     metadata.line_opt_out_requested_at = selectedAt;
+  } else {
+    metadata.line_opt_out_requested = false;
+    metadata.line_opt_out_cleared_at = selectedAt;
   }
 
   await db.prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
