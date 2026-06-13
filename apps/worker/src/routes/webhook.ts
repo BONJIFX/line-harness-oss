@@ -22,6 +22,7 @@ import type { Env } from '../index.js';
 const webhook = new Hono<Env>();
 
 const CSA_INTEREST_PREFIX = 'csa_interest:';
+const CSA_PAYMENT_INTAKE_URL = 'https://csa-members-v2.vercel.app/api/webhooks/line-harness/payment-completed';
 const CSA_INTEREST_SEGMENTS: Record<string, { label: string; tag: string; color: string; reply: string }> = {
   learn_candles: {
     label: 'ローソク足・相場分析を学びたい',
@@ -96,7 +97,15 @@ webhook.post('/webhook', async (c) => {
   const processingPromise = (async () => {
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin);
+        await handleEvent(
+          db,
+          lineClient,
+          event,
+          channelAccessToken,
+          matchedAccountId,
+          c.env.WORKER_URL || new URL(c.req.url).origin,
+          c.env.API_KEY,
+        );
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -115,6 +124,7 @@ async function handleEvent(
   lineAccessToken: string,
   lineAccountId: string | null = null,
   workerUrl?: string,
+  apiKey?: string,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -322,6 +332,11 @@ async function handleEvent(
       .bind(logId, friend.id, incomingText, now)
       .run();
 
+    const csaPaymentIntake = await handleCsaPaymentIntake(db, lineClient, event, friend, incomingText, apiKey);
+    if (csaPaymentIntake.replyTokenConsumed) {
+      return;
+    }
+
     // チャット unread 判定は auto_replies マッチ結果 (matched) を使う。
     // ハードコードキーワードリストは廃止 — auto_replies テーブルが single source of truth。
     const isTimeCommand = /(?:配信時間|配信|届けて|通知)[はを]?\s*\d{1,2}\s*時/.test(incomingText);
@@ -487,6 +502,70 @@ async function handleEvent(
     }, lineAccessToken, lineAccountId);
 
     return;
+  }
+}
+
+function shouldHandleCsaPaymentIntake(text: string): boolean {
+  const normalized = text.trim();
+  if (normalized === '決済') return true;
+
+  const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(normalized);
+  const hasPaymentSignal = /(カード|クレカ|銀行|振込|銀振|ゆうちょ|入金|決済)/.test(normalized);
+  return hasEmail && hasPaymentSignal;
+}
+
+async function handleCsaPaymentIntake(
+  db: D1Database,
+  lineClient: LineClient,
+  event: WebhookEvent,
+  friend: Awaited<ReturnType<typeof ensureFriendForIncomingMessage>>,
+  incomingText: string,
+  apiKey?: string,
+): Promise<{ handled: boolean; replyTokenConsumed: boolean }> {
+  if (event.type !== 'message' || !friend || !shouldHandleCsaPaymentIntake(incomingText)) {
+    return { handled: false, replyTokenConsumed: false };
+  }
+
+  if (!apiKey) {
+    console.error('CSA payment intake skipped: API_KEY is not configured');
+    return { handled: true, replyTokenConsumed: false };
+  }
+
+  try {
+    const response = await fetch(CSA_PAYMENT_INTAKE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        line_user_id: friend.line_user_id,
+        line_display_name: friend.display_name,
+        text: incomingText,
+        event_type: 'line_message_payment_intake',
+      }),
+    });
+
+    const result = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
+    if (!response.ok || !result.message) {
+      console.error('CSA payment intake webhook failed', response.status, result.error ?? 'missing message');
+      return { handled: true, replyTokenConsumed: false };
+    }
+
+    await lineClient.replyMessage(event.replyToken, [buildMessage('text', result.message)]);
+
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
+         VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'csa_payment_intake', ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, result.message, jstNow())
+      .run();
+
+    return { handled: true, replyTokenConsumed: true };
+  } catch (err) {
+    console.error('CSA payment intake error:', err);
+    return { handled: true, replyTokenConsumed: false };
   }
 }
 
