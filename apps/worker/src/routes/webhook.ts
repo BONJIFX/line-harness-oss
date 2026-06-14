@@ -333,7 +333,7 @@ async function handleEvent(
       .bind(logId, friend.id, incomingText, now)
       .run();
 
-    const csaPaymentIntake = await handleCsaPaymentIntake(db, lineClient, event, friend, incomingText, workerUrl);
+    const csaPaymentIntake = await handleCsaPaymentIntake(db, lineClient, event, friend, incomingText, workerUrl, apiKey);
     if (csaPaymentIntake.replyTokenConsumed) {
       return;
     }
@@ -523,6 +523,7 @@ async function handleCsaPaymentIntake(
   friend: Awaited<ReturnType<typeof ensureFriendForIncomingMessage>>,
   incomingText: string,
   workerUrl?: string,
+  apiKey?: string,
 ): Promise<{ handled: boolean; replyTokenConsumed: boolean }> {
   if (event.type !== 'message' || !friend || !shouldHandleCsaPaymentIntake(incomingText)) {
     return { handled: false, replyTokenConsumed: false };
@@ -530,7 +531,14 @@ async function handleCsaPaymentIntake(
 
   try {
     const baseUrl = (workerUrl || 'https://csa-line-harness.paison0357.workers.dev').replace(/\/$/, '');
-    const formUrl = baseUrl + '/api/liff/csa-apply';
+    const formToken = apiKey
+      ? await createCsaFormToken({
+        lineUserId: friend.line_user_id,
+        lineDisplayName: friend.display_name || '',
+        secret: apiKey,
+      })
+      : '';
+    const formUrl = baseUrl + '/api/liff/csa-apply' + (formToken ? `?t=${encodeURIComponent(formToken)}` : '');
     const message = buildCsaApplicationFormMessage(formUrl);
 
     await lineClient.replyMessage(event.replyToken, [buildMessage('text', message)]);
@@ -562,6 +570,43 @@ function buildCsaApplicationFormMessage(formUrl: string): string {
     '\u9001\u4fe1\u5f8c\u3001\u904b\u55b6\u304c\u5165\u91d1\u78ba\u8a8d\u3092\u884c\u3044\u307e\u3059\u3002',
     '\u78ba\u8a8d\u306b\u306f\u6700\u592724\u6642\u9593\u304b\u304b\u308b\u5834\u5408\u304c\u3042\u308a\u307e\u3059\u3002',
   ].join('\n');
+}
+
+async function createCsaFormToken({
+  lineUserId,
+  lineDisplayName,
+  secret,
+}: {
+  lineUserId: string;
+  lineDisplayName: string;
+  secret: string;
+}): Promise<string> {
+  const payload = {
+    line_user_id: lineUserId,
+    line_display_name: lineDisplayName,
+    exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
+  };
+  const payloadPart = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  const signaturePart = await hmacSha256(payloadPart, secret);
+  return `${payloadPart}.${signaturePart}`;
+}
+
+async function hmacSha256(payload: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 async function ensureFriendForIncomingMessage(

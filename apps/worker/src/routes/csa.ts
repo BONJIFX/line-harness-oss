@@ -7,9 +7,19 @@ const csa = new Hono<Env>();
 const DEFAULT_CSA_PAYMENT_INTAKE_URL = 'https://csa-members-v2-csa2.vercel.app/api/webhooks/line-harness/payment-completed';
 const CONTRACT_VERSION = 'CSA_CONTRACT_2026_06_15';
 
-csa.get('/api/liff/csa-apply', (c) => {
+csa.get('/api/liff/csa-apply', async (c) => {
+  const token = c.req.query('t') || '';
+  const tokenPayload = token
+    ? await verifyCsaFormToken(token, c.env.API_KEY)
+    : null;
   const liffId = extractLiffId(c.env.LIFF_URL);
-  return c.html(renderApplyPage({ liffId, contractVersion: CONTRACT_VERSION }));
+  return c.html(renderApplyPage({
+    liffId,
+    contractVersion: CONTRACT_VERSION,
+    formToken: token,
+    tokenLineUserId: tokenPayload?.line_user_id || '',
+    tokenLineDisplayName: tokenPayload?.line_display_name || '',
+  }));
 });
 
 csa.post('/api/liff/csa-application', async (c) => {
@@ -24,13 +34,18 @@ csa.post('/api/liff/csa-application', async (c) => {
     contractVersion?: string;
     contractAgreedAt?: string;
     userAgent?: string;
+    formToken?: string;
   } | null;
 
   if (!payload) {
     return c.json({ ok: false, message: '入力内容を確認できませんでした。フォームを再読み込みしてもう一度送信してください。' }, 400);
   }
 
-  const lineUserId = clean(payload.lineUserId, 120);
+  const tokenPayload = payload.formToken
+    ? await verifyCsaFormToken(payload.formToken, c.env.API_KEY)
+    : null;
+  const lineUserId = clean(payload.lineUserId || tokenPayload?.line_user_id, 120);
+  const lineDisplayName = clean(payload.lineDisplayName || tokenPayload?.line_display_name, 120);
   const applicantName = clean(payload.applicantName, 80);
   const email = clean(payload.email, 200).toLowerCase();
   const paymentMethod = normalizePaymentMethod(payload.paymentMethod);
@@ -61,7 +76,7 @@ csa.post('/api/liff/csa-application', async (c) => {
     },
     body: JSON.stringify({
       line_user_id: lineUserId,
-      line_display_name: clean(payload.lineDisplayName, 120),
+      line_display_name: lineDisplayName,
       applicant_name: applicantName,
       applicant_kana: clean(payload.applicantKana, 80),
       email,
@@ -138,7 +153,19 @@ async function markFriendApplicationSubmitted(
     .run();
 }
 
-function renderApplyPage({ liffId, contractVersion }: { liffId: string; contractVersion: string }) {
+function renderApplyPage({
+  liffId,
+  contractVersion,
+  formToken,
+  tokenLineUserId,
+  tokenLineDisplayName,
+}: {
+  liffId: string;
+  contractVersion: string;
+  formToken: string;
+  tokenLineUserId: string;
+  tokenLineDisplayName: string;
+}) {
   return `<!doctype html>
 <html lang="ja">
 <head>
@@ -278,12 +305,19 @@ function renderApplyPage({ liffId, contractVersion }: { liffId: string; contract
   <script>
     const LIFF_ID = ${JSON.stringify(liffId)};
     const CONTRACT_VERSION = ${JSON.stringify(contractVersion)};
+    const FORM_TOKEN = ${JSON.stringify(formToken)};
+    const TOKEN_LINE_USER_ID = ${JSON.stringify(tokenLineUserId)};
+    const TOKEN_LINE_DISPLAY_NAME = ${JSON.stringify(tokenLineDisplayName)};
     let lineProfile = null;
 
     async function init() {
       const error = document.getElementById('error');
       try {
-        if (!LIFF_ID) throw new Error('LINE認証設定が見つかりません。');
+        if (TOKEN_LINE_USER_ID) {
+          lineProfile = { userId: TOKEN_LINE_USER_ID, displayName: TOKEN_LINE_DISPLAY_NAME };
+          return;
+        }
+        if (!LIFF_ID) throw new Error('LINEの申込リンクが正しくありません。LINEで再度「決済」と送って、届いたフォームから開いてください。');
         await liff.init({ liffId: LIFF_ID });
         if (!liff.isLoggedIn()) {
           liff.login({ redirectUri: location.href });
@@ -316,6 +350,7 @@ function renderApplyPage({ liffId, contractVersion }: { liffId: string; contract
           body: JSON.stringify({
             lineUserId: lineProfile.userId,
             lineDisplayName: lineProfile.displayName || '',
+            formToken: FORM_TOKEN,
             applicantName: document.getElementById('name').value,
             email: document.getElementById('email').value,
             paymentMethod: document.getElementById('paymentMethod').value,
@@ -381,6 +416,60 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+async function verifyCsaFormToken(token: string, secret: string): Promise<{
+  line_user_id: string;
+  line_display_name?: string;
+  exp: number;
+} | null> {
+  const [payloadPart, signaturePart] = token.split('.');
+  if (!payloadPart || !signaturePart || !secret) return null;
+
+  const expected = await hmacSha256(payloadPart, secret);
+  if (expected !== signaturePart) return null;
+
+  try {
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart))) as {
+      line_user_id?: string;
+      line_display_name?: string;
+      exp?: number;
+    };
+    if (!payload.line_user_id || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return {
+      line_user_id: payload.line_user_id,
+      line_display_name: payload.line_display_name,
+      exp: payload.exp,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function hmacSha256(payload: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 export { csa };
