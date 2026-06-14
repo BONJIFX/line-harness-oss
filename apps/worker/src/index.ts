@@ -45,6 +45,7 @@ import { autoReplies } from './routes/auto-replies.js';
 import { trafficPools } from './routes/traffic-pools.js';
 import { meetCallback } from './routes/meet-callback.js';
 import { messageTemplates } from './routes/message-templates.js';
+import { csa } from './routes/csa.js';
 
 export type Env = {
   Bindings: {
@@ -59,6 +60,8 @@ export type Env = {
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
+    CSA_PAYMENT_INTAKE_URL?: string;
+    CSA_PAYMENT_INTAKE_SECRET?: string;
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
     IG_HARNESS_URL?: string;  // Optional: IG Harness API URL for cross-platform linking
     IG_HARNESS_LINK_SECRET?: string;  // Shared secret for IG Harness link-line webhook
@@ -116,6 +119,7 @@ app.route('/', trafficPools);
 app.route('/', accountSettings);
 app.route('/', meetCallback);
 app.route('/', messageTemplates);
+app.route('/', csa);
 
 // Self-hosted QR code proxy — prevents leaking ref tokens to third-party services
 app.get('/api/qr', async (c) => {

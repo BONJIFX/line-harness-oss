@@ -1,0 +1,386 @@
+import { Hono } from 'hono';
+import type { Env } from '../index.js';
+import { jstNow } from '@line-crm/db';
+
+const csa = new Hono<Env>();
+
+const DEFAULT_CSA_PAYMENT_INTAKE_URL = 'https://csa-members-v2-csa2.vercel.app/api/webhooks/line-harness/payment-completed';
+const CONTRACT_VERSION = 'CSA_CONTRACT_2026_06_15';
+
+csa.get('/api/liff/csa-apply', (c) => {
+  const liffId = extractLiffId(c.env.LIFF_URL);
+  return c.html(renderApplyPage({ liffId, contractVersion: CONTRACT_VERSION }));
+});
+
+csa.post('/api/liff/csa-application', async (c) => {
+  const payload = (await c.req.json().catch(() => null)) as {
+    lineUserId?: string;
+    lineDisplayName?: string;
+    applicantName?: string;
+    applicantKana?: string;
+    email?: string;
+    phone?: string;
+    paymentMethod?: string;
+    contractVersion?: string;
+    contractAgreedAt?: string;
+    userAgent?: string;
+  } | null;
+
+  if (!payload) {
+    return c.json({ ok: false, message: '入力内容を確認できませんでした。フォームを再読み込みしてもう一度送信してください。' }, 400);
+  }
+
+  const lineUserId = clean(payload.lineUserId, 120);
+  const applicantName = clean(payload.applicantName, 80);
+  const email = clean(payload.email, 200).toLowerCase();
+  const paymentMethod = normalizePaymentMethod(payload.paymentMethod);
+  const contractAgreedAt = normalizeIsoDate(clean(payload.contractAgreedAt, 80));
+
+  const missing = [
+    !lineUserId ? 'LINE認証' : null,
+    !applicantName ? '氏名' : null,
+    !email ? 'メールアドレス' : null,
+    !paymentMethod ? '決済方法' : null,
+    !contractAgreedAt ? '契約同意' : null,
+  ].filter(Boolean);
+
+  if (missing.length > 0) {
+    return c.json({
+      ok: false,
+      message: `未入力があります: ${missing.join('、')}`,
+    }, 400);
+  }
+
+  const intakeUrl = c.env.CSA_PAYMENT_INTAKE_URL || DEFAULT_CSA_PAYMENT_INTAKE_URL;
+  const secret = c.env.CSA_PAYMENT_INTAKE_SECRET || c.env.API_KEY;
+  const response = await fetch(intakeUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${secret}`,
+    },
+    body: JSON.stringify({
+      line_user_id: lineUserId,
+      line_display_name: clean(payload.lineDisplayName, 120),
+      applicant_name: applicantName,
+      applicant_kana: clean(payload.applicantKana, 80),
+      email,
+      phone: clean(payload.phone, 30) || null,
+      payment_method: paymentMethod,
+      contract_version: clean(payload.contractVersion, 80) || CONTRACT_VERSION,
+      contract_agreed_at: contractAgreedAt,
+      user_agent: clean(payload.userAgent, 500) || c.req.header('user-agent') || '',
+      event_type: 'line_liff_contract_application',
+    }),
+  });
+
+  const result = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
+    message?: string;
+    error?: string;
+    application_id?: string;
+    duplicate?: boolean;
+  };
+
+  if (!response.ok || !result.ok) {
+    return c.json({
+      ok: false,
+      message: result.message || result.error || '送信に失敗しました。時間をおいてもう一度お試しください。',
+    }, response.ok ? 400 : 502);
+  }
+
+  const confirmedPaymentMethod = paymentMethod as 'card' | 'bank_transfer';
+  await markFriendApplicationSubmitted(c.env.DB, {
+    lineUserId,
+    applicantName,
+    email,
+    paymentMethod: confirmedPaymentMethod,
+    applicationId: result.application_id,
+    duplicate: Boolean(result.duplicate),
+  });
+
+  return c.json({
+    ok: true,
+    duplicate: Boolean(result.duplicate),
+    message: result.message || '申込情報を受け付けました。',
+  });
+});
+
+async function markFriendApplicationSubmitted(
+  db: D1Database,
+  input: {
+    lineUserId: string;
+    applicantName: string;
+    email: string;
+    paymentMethod: 'card' | 'bank_transfer';
+    applicationId?: string;
+    duplicate: boolean;
+  },
+) {
+  const friend = await db
+    .prepare('SELECT id, metadata FROM friends WHERE line_user_id = ?')
+    .bind(input.lineUserId)
+    .first<{ id: string; metadata: string | null }>();
+  if (!friend) return;
+
+  const metadata = safeJson(friend.metadata);
+  metadata.csa_application_submitted_at = jstNow();
+  metadata.csa_application_id = input.applicationId ?? metadata.csa_application_id ?? null;
+  metadata.csa_application_duplicate = input.duplicate;
+  metadata.csa_application_name = input.applicantName;
+  metadata.csa_application_email = input.email;
+  metadata.csa_payment_method = input.paymentMethod;
+  metadata.csa_contract_version = CONTRACT_VERSION;
+
+  await db
+    .prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+    .bind(JSON.stringify(metadata), jstNow(), friend.id)
+    .run();
+}
+
+function renderApplyPage({ liffId, contractVersion }: { liffId: string; contractVersion: string }) {
+  return `<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CSA 申込フォーム</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071225;
+      --panel: #0e1a31;
+      --panel-2: #14223c;
+      --line: rgba(221, 170, 62, 0.34);
+      --gold: #d9a83a;
+      --gold-2: #f3c766;
+      --ink: #fff8e6;
+      --muted: #b8c2d8;
+      --danger: #ff7676;
+      --ok: #80d89b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #102246 0, var(--bg) 46%, #030813 100%);
+      color: var(--ink);
+    }
+    main { width: min(720px, calc(100% - 28px)); margin: 0 auto; padding: 28px 0 44px; }
+    .eyebrow { color: var(--gold-2); font-size: 12px; font-weight: 800; letter-spacing: .18em; }
+    h1 { margin: 8px 0 10px; font-size: clamp(28px, 8vw, 44px); line-height: 1.1; letter-spacing: 0; }
+    p { color: var(--muted); line-height: 1.8; }
+    form, .complete {
+      margin-top: 22px;
+      border: 1px solid var(--line);
+      background: rgba(14, 26, 49, .94);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, .28);
+    }
+    label { display: block; margin-top: 16px; font-size: 13px; font-weight: 800; color: var(--gold-2); }
+    input, select {
+      width: 100%;
+      margin-top: 7px;
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 6px;
+      background: #081226;
+      color: var(--ink);
+      font: inherit;
+      padding: 12px;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(217,168,58,.18); }
+    .contract {
+      margin-top: 18px;
+      max-height: 240px;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,.13);
+      background: #09152a;
+      border-radius: 6px;
+      padding: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.75;
+    }
+    .check {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 16px;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .check input { width: 18px; height: 18px; margin: 3px 0 0; flex: 0 0 auto; }
+    button {
+      width: 100%;
+      margin-top: 18px;
+      border: 0;
+      border-radius: 6px;
+      background: linear-gradient(135deg, var(--gold), var(--gold-2));
+      color: #1a1203;
+      font-weight: 900;
+      padding: 13px 16px;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .58; cursor: not-allowed; }
+    .error { margin-top: 12px; color: var(--danger); font-size: 13px; line-height: 1.7; }
+    .complete { border-color: rgba(128,216,155,.5); }
+    .complete h2 { color: var(--ok); margin: 0 0 8px; }
+    .hidden { display: none; }
+    .subtle { font-size: 12px; color: #8794ad; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">CANDLE SMART ACADEMY</div>
+    <h1>CSA 申込フォーム</h1>
+    <p>契約内容を確認し、申込情報を1回で送信してください。送信後は運営が入金確認を行い、確認完了後にこのLINEへご本人専用のDiscord招待URLをお送りします。</p>
+
+    <form id="form">
+      <label>氏名
+        <input id="name" autocomplete="name" required placeholder="例: 山田 太郎" />
+      </label>
+      <label>メールアドレス
+        <input id="email" autocomplete="email" type="email" required placeholder="購入時に申告するメールアドレス" />
+      </label>
+      <label>決済方法
+        <select id="paymentMethod" required>
+          <option value="">選択してください</option>
+          <option value="card">カード</option>
+          <option value="bank_transfer">銀行振込</option>
+        </select>
+      </label>
+      <label>電話番号（任意）
+        <input id="phone" autocomplete="tel" placeholder="緊急時の連絡先として任意" />
+      </label>
+
+      <div class="contract">
+        <strong>契約・受講前確認</strong><br />
+        CSAは、ローソク足・相場構造・リスク管理を学ぶ教育サービスです。特定の金融商品の購入、売却、利益を保証するものではありません。受講者は自己責任で学習・検証・取引判断を行います。受講期間、支払方法、Discordおよび会員サイト利用ルール、禁止事項、返金や停止条件は運営案内に従います。本人確認や入金確認が完了するまで、学習チャンネルと会員サイトの利用は開始されません。
+      </div>
+      <label class="check">
+        <input id="agree" type="checkbox" required />
+        <span>上記の契約・受講前確認を読み、CSAが教育サービスであること、投資判断は自己責任であること、本人専用の情報で申し込むことに同意します。</span>
+      </label>
+      <p class="subtle">契約バージョン: ${escapeHtml(contractVersion)}</p>
+      <button id="submit" type="submit">申込情報を送信する</button>
+      <div id="error" class="error hidden"></div>
+    </form>
+
+    <section id="complete" class="complete hidden">
+      <h2>受け付けました</h2>
+      <p id="completeMessage"></p>
+    </section>
+  </main>
+  <script>
+    const LIFF_ID = ${JSON.stringify(liffId)};
+    const CONTRACT_VERSION = ${JSON.stringify(contractVersion)};
+    let lineProfile = null;
+
+    async function init() {
+      const error = document.getElementById('error');
+      try {
+        if (!LIFF_ID) throw new Error('LINE認証設定が見つかりません。');
+        await liff.init({ liffId: LIFF_ID });
+        if (!liff.isLoggedIn()) {
+          liff.login({ redirectUri: location.href });
+          return;
+        }
+        lineProfile = await liff.getProfile();
+      } catch (err) {
+        error.textContent = err instanceof Error ? err.message : 'LINE認証に失敗しました。';
+        error.classList.remove('hidden');
+      }
+    }
+
+    document.getElementById('form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const error = document.getElementById('error');
+      const button = document.getElementById('submit');
+      error.classList.add('hidden');
+      error.textContent = '';
+      if (!lineProfile?.userId) {
+        error.textContent = 'LINE認証が完了していません。ページを再読み込みしてください。';
+        error.classList.remove('hidden');
+        return;
+      }
+      button.disabled = true;
+      button.textContent = '送信中...';
+      try {
+        const res = await fetch('/api/liff/csa-application', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lineUserId: lineProfile.userId,
+            lineDisplayName: lineProfile.displayName || '',
+            applicantName: document.getElementById('name').value,
+            email: document.getElementById('email').value,
+            paymentMethod: document.getElementById('paymentMethod').value,
+            phone: document.getElementById('phone').value,
+            contractVersion: CONTRACT_VERSION,
+            contractAgreedAt: new Date().toISOString(),
+            userAgent: navigator.userAgent,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.message || '送信に失敗しました。');
+        document.getElementById('form').classList.add('hidden');
+        document.getElementById('completeMessage').textContent = data.message || '申込情報を受け付けました。';
+        document.getElementById('complete').classList.remove('hidden');
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = '申込情報を送信する';
+        error.textContent = err instanceof Error ? err.message : '送信に失敗しました。';
+        error.classList.remove('hidden');
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>`;
+}
+
+function clean(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+function normalizePaymentMethod(value: unknown): 'card' | 'bank_transfer' | '' {
+  const text = clean(value, 80);
+  if (text === 'card' || text === 'bank_transfer') return text;
+  return '';
+}
+
+function normalizeIsoDate(value: string): string {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+
+function extractLiffId(liffUrl: unknown): string {
+  return typeof liffUrl === 'string'
+    ? liffUrl.match(/liff\.line\.me\/([0-9]+-[A-Za-z0-9]+)/)?.[1] ?? ''
+    : '';
+}
+
+function safeJson(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+export { csa };

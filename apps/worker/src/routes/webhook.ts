@@ -22,7 +22,6 @@ import type { Env } from '../index.js';
 const webhook = new Hono<Env>();
 
 const CSA_INTEREST_PREFIX = 'csa_interest:';
-const CSA_PAYMENT_INTAKE_URL = 'https://csa-members-v2.vercel.app/api/webhooks/line-harness/payment-completed';
 const CSA_INTEREST_SEGMENTS: Record<string, { label: string; tag: string; color: string; reply: string }> = {
   learn_candles: {
     label: 'ローソク足・相場分析を学びたい',
@@ -105,6 +104,7 @@ webhook.post('/webhook', async (c) => {
           matchedAccountId,
           c.env.WORKER_URL || new URL(c.req.url).origin,
           c.env.API_KEY,
+          c.env.LIFF_URL,
         );
       } catch (err) {
         console.error('Error handling webhook event:', err);
@@ -125,6 +125,7 @@ async function handleEvent(
   lineAccountId: string | null = null,
   workerUrl?: string,
   apiKey?: string,
+  liffUrl?: string,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -332,7 +333,7 @@ async function handleEvent(
       .bind(logId, friend.id, incomingText, now)
       .run();
 
-    const csaPaymentIntake = await handleCsaPaymentIntake(db, lineClient, event, friend, incomingText, apiKey);
+    const csaPaymentIntake = await handleCsaPaymentIntake(db, lineClient, event, friend, incomingText, workerUrl);
     if (csaPaymentIntake.replyTokenConsumed) {
       return;
     }
@@ -406,7 +407,7 @@ async function handleEvent(
               footer: { type: 'box', layout: 'vertical', paddingAll: '16px',
                 contents: [
                   { type: 'button', action: { type: 'message', label: '導入について相談する', text: '導入支援を希望します' }, style: 'primary', color: '#06C755' },
-                  ...(c.env.LIFF_URL ? [{ type: 'button', action: { type: 'uri', label: 'フィードバックを送る', uri: `${c.env.LIFF_URL}?page=form` }, style: 'secondary', margin: 'sm' }] : []),
+                  ...(liffUrl ? [{ type: 'button', action: { type: 'uri', label: 'フィードバックを送る', uri: `${liffUrl}?page=form` }, style: 'secondary', margin: 'sm' }] : []),
                 ],
               },
             }))]);
@@ -507,10 +508,11 @@ async function handleEvent(
 
 function shouldHandleCsaPaymentIntake(text: string): boolean {
   const normalized = text.trim();
-  if (normalized === '決済') return true;
+  if (!normalized) return false;
+  if (/^(\u6c7a\u6e08|\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized)) return true;
 
   const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(normalized);
-  const hasPaymentSignal = /(カード|クレカ|銀行|振込|銀振|ゆうちょ|入金|決済)/.test(normalized);
+  const hasPaymentSignal = /(\u30ab\u30fc\u30c9|\u30af\u30ec\u30ab|\u9280\u884c|\u632f\u8fbc|\u9280\u632f|\u3086\u3046\u3061\u3087|\u5165\u91d1|\u6c7a\u6e08)/.test(normalized);
   return hasEmail && hasPaymentSignal;
 }
 
@@ -520,53 +522,46 @@ async function handleCsaPaymentIntake(
   event: WebhookEvent,
   friend: Awaited<ReturnType<typeof ensureFriendForIncomingMessage>>,
   incomingText: string,
-  apiKey?: string,
+  workerUrl?: string,
 ): Promise<{ handled: boolean; replyTokenConsumed: boolean }> {
   if (event.type !== 'message' || !friend || !shouldHandleCsaPaymentIntake(incomingText)) {
     return { handled: false, replyTokenConsumed: false };
   }
 
-  if (!apiKey) {
-    console.error('CSA payment intake skipped: API_KEY is not configured');
-    return { handled: true, replyTokenConsumed: false };
-  }
-
   try {
-    const response = await fetch(CSA_PAYMENT_INTAKE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        line_user_id: friend.line_user_id,
-        line_display_name: friend.display_name,
-        text: incomingText,
-        event_type: 'line_message_payment_intake',
-      }),
-    });
+    const baseUrl = (workerUrl || 'https://csa-line-harness.paison0357.workers.dev').replace(/\/$/, '');
+    const formUrl = baseUrl + '/api/liff/csa-apply';
+    const message = buildCsaApplicationFormMessage(formUrl);
 
-    const result = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
-    if (!response.ok || !result.message) {
-      console.error('CSA payment intake webhook failed', response.status, result.error ?? 'missing message');
-      return { handled: true, replyTokenConsumed: false };
-    }
-
-    await lineClient.replyMessage(event.replyToken, [buildMessage('text', result.message)]);
+    await lineClient.replyMessage(event.replyToken, [buildMessage('text', message)]);
 
     await db
       .prepare(
         `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
          VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'csa_payment_intake', ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, result.message, jstNow())
+      .bind(crypto.randomUUID(), friend.id, message, jstNow())
       .run();
 
     return { handled: true, replyTokenConsumed: true };
   } catch (err) {
-    console.error('CSA payment intake error:', err);
+    console.error('CSA payment intake form reply error:', err);
     return { handled: true, replyTokenConsumed: false };
   }
+}
+
+function buildCsaApplicationFormMessage(formUrl: string): string {
+  return [
+    '\u304a\u7533\u8fbc\u307f\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3059\u3002',
+    '',
+    '\u4e0b\u306e\u30d5\u30a9\u30fc\u30e0\u3067\u5951\u7d04\u5185\u5bb9\u306e\u78ba\u8a8d\u3068\u7533\u8fbc\u60c5\u5831\u306e\u5165\u529b\u3092\u304a\u9858\u3044\u3057\u307e\u3059\u3002',
+    '\u5165\u529b\u306f1\u56de\u3067\u5b8c\u4e86\u3057\u307e\u3059\u3002',
+    '',
+    formUrl,
+    '',
+    '\u9001\u4fe1\u5f8c\u3001\u904b\u55b6\u304c\u5165\u91d1\u78ba\u8a8d\u3092\u884c\u3044\u307e\u3059\u3002',
+    '\u78ba\u8a8d\u306b\u306f\u6700\u592724\u6642\u9593\u304b\u304b\u308b\u5834\u5408\u304c\u3042\u308a\u307e\u3059\u3002',
+  ].join('\n');
 }
 
 async function ensureFriendForIncomingMessage(
