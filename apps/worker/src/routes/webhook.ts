@@ -509,10 +509,7 @@ async function handleEvent(
 function shouldHandleCsaPaymentIntake(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
-  // Exact "決済" is owned by the configurable keyword automation so it can
-  // return payment information. Keep the application form shortcut for the
-  // explicit application/join keywords only.
-  if (/^(\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized)) return true;
+  if (/^(\u6c7a\u6e08|\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized)) return true;
 
   const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(normalized);
   const hasPaymentSignal = /(\u30ab\u30fc\u30c9|\u30af\u30ec\u30ab|\u9280\u884c|\u632f\u8fbc|\u9280\u632f|\u3086\u3046\u3061\u3087|\u5165\u91d1|\u6c7a\u6e08)/.test(normalized);
@@ -557,7 +554,16 @@ async function handleCsaPaymentIntake(
     return { handled: true, replyTokenConsumed: true };
   } catch (err) {
     console.error('CSA payment intake form reply error:', err);
-    return { handled: true, replyTokenConsumed: false };
+    try {
+      await lineClient.replyMessage(event.replyToken, [buildMessage('text', [
+        '申込フォームを発行できませんでした。',
+        '少し時間をおいて、もう一度「決済」と送ってください。',
+      ].join('\n'))]);
+      return { handled: true, replyTokenConsumed: true };
+    } catch (replyError) {
+      console.error('CSA payment intake failure reply error:', replyError);
+      return { handled: true, replyTokenConsumed: false };
+    }
   }
 }
 
@@ -565,8 +571,22 @@ function buildCsaApplicationFormMessage(formUrl: string): string {
   return [
     '\u304a\u7533\u8fbc\u307f\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3059\u3002',
     '',
-    '\u4e0b\u306e\u30d5\u30a9\u30fc\u30e0\u3067\u5951\u7d04\u5185\u5bb9\u306e\u78ba\u8a8d\u3068\u7533\u8fbc\u60c5\u5831\u306e\u5165\u529b\u3092\u304a\u9858\u3044\u3057\u307e\u3059\u3002',
-    '\u5165\u529b\u306f1\u56de\u3067\u5b8c\u4e86\u3057\u307e\u3059\u3002',
+    'CSAのお支払い案内です。',
+    '',
+    '【カード払い】',
+    '下記URLからお手続きください。',
+    'https://fincs.jp/plan/8030521697119276466/join/personalinfo?planPriceId=742',
+    '',
+    '【銀行振込】',
+    '金額: 330,000円',
+    '銀行: ゆうちょ銀行',
+    '支店: 〇一八支店',
+    '種別: 普通',
+    '口座番号: 1843444',
+    '口座名義: コクサイセイキトケイキヨウカイ',
+    '',
+    '【申込フォーム】',
+    'お支払い手続きとあわせて、下のフォームにお名前・メールアドレス・電話番号・支払方法を入力してください。',
     '',
     formUrl,
     '',
