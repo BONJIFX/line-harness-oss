@@ -4,6 +4,7 @@ export const CSA_COPY_SHA256 = 'A1C989D8AE97F6AF45931A18DB0326DB2D70C09767FC8A53
 export const CSA_TERMS_VERSION = 'CSA_TERMS_2026_07_16_DRAFT';
 export const CSA_COMMERCE_LAW_VERSION = 'CSA_COMMERCE_LAW_2026_07_16_DRAFT';
 export const CSA_PRIVACY_VERSION = 'CSA_PRIVACY_2026_07_16_DRAFT';
+export const CSA_ROUTE_VERSION = '20260716-2';
 export const CSA_CARD_PAYMENT_URL = 'https://fincs.jp/plan/8030521697119276466/join/personalinfo?planPriceId=742';
 
 export const CSA_BANK_DETAILS = {
@@ -158,9 +159,9 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
       <div class="condition"><strong>■ 個人情報の取扱い</strong><p>ご記入いただいた情報(氏名・連絡先・LINE の識別子など)は、受講のご案内・ご連絡・会員管理のために利用します。くわしくは下のプライバシーポリシーをご覧ください。</p></div>
 
       <nav class="legal-links" aria-label="契約文書">
-        <a href="/api/liff/csa-terms" target="_blank" rel="noreferrer">利用規約</a>
-        <a href="/api/liff/csa-commerce-law" target="_blank" rel="noreferrer">特定商取引法に基づく表記</a>
-        <a href="/api/liff/csa-privacy" target="_blank" rel="noreferrer">プライバシーポリシー</a>
+        <a href="/api/liff/csa-terms?v=${CSA_ROUTE_VERSION}" target="_blank" rel="noreferrer">利用規約</a>
+        <a href="/api/liff/csa-commerce-law?v=${CSA_ROUTE_VERSION}" target="_blank" rel="noreferrer">特定商取引法に基づく表記</a>
+        <a href="/api/liff/csa-privacy?v=${CSA_ROUTE_VERSION}" target="_blank" rel="noreferrer">プライバシーポリシー</a>
       </nav>
 
       <label class="field">氏名<input id="name" autocomplete="name" required placeholder="例: 山田 太郎" /></label>

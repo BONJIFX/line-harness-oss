@@ -544,7 +544,8 @@ async function handleCsaPaymentIntake(
           secret: apiKey,
         })
         : '';
-      const formUrl = baseUrl + '/api/liff/csa-apply' + (formToken ? `?t=${encodeURIComponent(formToken)}` : '');
+      const formUrl = baseUrl + '/api/liff/csa-apply?v=20260716-2'
+        + (formToken ? `&t=${encodeURIComponent(formToken)}` : '');
       messageContent = JSON.stringify(buildCsaApplicationFormFlex(formUrl));
       altText = 'CSAのお申込み前の最終確認です。';
     } else {

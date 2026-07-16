@@ -7,6 +7,7 @@ import {
   CSA_COPY_SHA256,
   CSA_COPY_VERSION,
   CSA_PRIVACY_VERSION,
+  CSA_ROUTE_VERSION,
   CSA_TERMS_VERSION,
   renderCsaCommerceLawPage,
   renderCsaPrepaymentPage,
@@ -19,6 +20,7 @@ const csa = new Hono<Env>();
 const DEFAULT_CSA_PAYMENT_INTAKE_URL = 'https://csa-members-v2-csa2.vercel.app/api/webhooks/line-harness/payment-completed';
 
 csa.get('/api/liff/csa-apply', async (c) => {
+  setNoStore(c);
   const token = c.req.query('t') || '';
   const requestUrl = new URL(c.req.url);
   const localPreview = c.req.query('preview') === '1'
@@ -36,9 +38,18 @@ csa.get('/api/liff/csa-apply', async (c) => {
   }));
 });
 
-csa.get('/api/liff/csa-terms', (c) => c.html(renderCsaTermsPage()));
-csa.get('/api/liff/csa-commerce-law', (c) => c.html(renderCsaCommerceLawPage()));
-csa.get('/api/liff/csa-privacy', (c) => c.html(renderCsaPrivacyPage()));
+csa.get('/api/liff/csa-terms', (c) => {
+  setNoStore(c);
+  return c.html(renderCsaTermsPage());
+});
+csa.get('/api/liff/csa-commerce-law', (c) => {
+  setNoStore(c);
+  return c.html(renderCsaCommerceLawPage());
+});
+csa.get('/api/liff/csa-privacy', (c) => {
+  setNoStore(c);
+  return c.html(renderCsaPrivacyPage());
+});
 
 csa.post('/api/liff/csa-application', async (c) => {
   const payload = (await c.req.json().catch(() => null)) as {
@@ -528,6 +539,13 @@ function renderApplyPage({
 
 function clean(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+function setNoStore(c: { header(name: string, value: string): void }) {
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  c.header('Pragma', 'no-cache');
+  c.header('Expires', '0');
+  c.header('X-CSA-Route-Version', CSA_ROUTE_VERSION);
 }
 
 function normalizePaymentMethod(value: unknown): 'card' | 'bank_transfer' | '' {

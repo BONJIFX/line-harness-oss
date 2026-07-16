@@ -40,6 +40,11 @@ if (/max-height\s*:\s*240px|class="contract"/.test(prepayment)) {
 for (const route of ['/api/liff/csa-terms', '/api/liff/csa-commerce-law', '/api/liff/csa-privacy']) {
   if (!csaRoute.includes(route)) failures.push(`missing legal route: ${route}`);
 }
+if (!prepayment.includes('?v=${CSA_ROUTE_VERSION}')) failures.push('legal links are missing the route cache-buster');
+if (!csaRoute.includes("'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0'")) {
+  failures.push('LIFF routes are missing no-store headers');
+}
+if (!webhook.includes('/api/liff/csa-apply?v=20260716-2')) failures.push('LINE form URL is missing the route cache-buster');
 
 for (const field of [
   'displayed_copy_sha256',
