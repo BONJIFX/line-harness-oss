@@ -509,7 +509,7 @@ async function handleEvent(
 function shouldHandleCsaPaymentIntake(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
-  if (/^(\u6c7a\u6e08|\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized)) return true;
+  if (/^(\u6c7a\u6e08|\u652f\u6255\u3044\u5b8c\u4e86|\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized)) return true;
 
   const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(normalized);
   const hasPaymentSignal = /(\u30ab\u30fc\u30c9|\u30af\u30ec\u30ab|\u9280\u884c|\u632f\u8fbc|\u9280\u632f|\u3086\u3046\u3061\u3087|\u5165\u91d1|\u6c7a\u6e08)/.test(normalized);
@@ -530,25 +530,37 @@ async function handleCsaPaymentIntake(
   }
 
   try {
+    const normalized = incomingText.trim();
+    const isPaymentGuide = /^(\u6c7a\u6e08|\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized);
     const baseUrl = (workerUrl || 'https://csa-line-harness.paison0357.workers.dev').replace(/\/$/, '');
-    const formToken = apiKey
-      ? await createCsaFormToken({
-        lineUserId: friend.line_user_id,
-        lineDisplayName: friend.display_name || '',
-        secret: apiKey,
-      })
-      : '';
-    const formUrl = baseUrl + '/api/liff/csa-apply' + (formToken ? `?t=${encodeURIComponent(formToken)}` : '');
-    const message = buildCsaApplicationFormMessage(formUrl);
+    let messageContent: string;
+    let altText: string;
 
-    await lineClient.replyMessage(event.replyToken, [buildMessage('text', message)]);
+    if (isPaymentGuide) {
+      messageContent = JSON.stringify(buildCsaPaymentGuideFlex());
+      altText = 'CSAのお支払い案内です。';
+    } else {
+      const formToken = apiKey
+        ? await createCsaFormToken({
+          lineUserId: friend.line_user_id,
+          lineDisplayName: friend.display_name || '',
+          secret: apiKey,
+        })
+        : '';
+      const formUrl = baseUrl + '/api/liff/csa-apply' + (formToken ? `?t=${encodeURIComponent(formToken)}` : '');
+      messageContent = JSON.stringify(buildCsaApplicationFormFlex(formUrl));
+      altText = '支払い完了後の申込フォームです。';
+    }
+    const message = buildMessage('flex', messageContent, altText);
+
+    await lineClient.replyMessage(event.replyToken, [message]);
 
     await db
       .prepare(
         `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
-         VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'csa_payment_intake', ?)`,
+         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'reply', 'csa_payment_intake', ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, message, jstNow())
+      .bind(crypto.randomUUID(), friend.id, messageContent, jstNow())
       .run();
 
     return { handled: true, replyTokenConsumed: true };
@@ -567,32 +579,64 @@ async function handleCsaPaymentIntake(
   }
 }
 
-function buildCsaApplicationFormMessage(formUrl: string): string {
-  return [
-    '\u304a\u7533\u8fbc\u307f\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3059\u3002',
-    '',
-    'CSAのお支払い案内です。',
-    '',
-    '【カード払い】',
-    '下記URLからお手続きください。',
-    'https://fincs.jp/plan/8030521697119276466/join/personalinfo?planPriceId=742',
-    '',
-    '【銀行振込】',
-    '金額: 330,000円',
-    '銀行: ゆうちょ銀行',
-    '支店: 〇一八支店',
-    '種別: 普通',
-    '口座番号: 1843444',
-    '口座名義: コクサイセイキトケイキヨウカイ',
-    '',
-    '【申込フォーム】',
-    'お支払い手続きとあわせて、下のフォームにお名前・メールアドレス・電話番号・支払方法を入力してください。',
-    '',
-    formUrl,
-    '',
-    '\u9001\u4fe1\u5f8c\u3001\u904b\u55b6\u304c\u5165\u91d1\u78ba\u8a8d\u3092\u884c\u3044\u307e\u3059\u3002',
-    '\u78ba\u8a8d\u306b\u306f\u6700\u592724\u6642\u9593\u304b\u304b\u308b\u5834\u5408\u304c\u3042\u308a\u307e\u3059\u3002',
-  ].join('\n');
+function buildCsaPaymentGuideFlex() {
+  return {
+    type: 'bubble',
+    size: 'mega',
+    header: {
+      type: 'box', layout: 'vertical', backgroundColor: '#0B1428', paddingAll: '18px',
+      contents: [
+        { type: 'text', text: 'Candle Smart Academy', color: '#D7A63D', size: 'xs', weight: 'bold' },
+        { type: 'text', text: 'お支払い案内', color: '#FFFFFF', size: 'xl', weight: 'bold', margin: 'sm' },
+      ],
+    },
+    body: {
+      type: 'box', layout: 'vertical', paddingAll: '18px', spacing: 'md',
+      contents: [
+        { type: 'text', text: 'カード払い', size: 'md', weight: 'bold', color: '#0B1428' },
+        { type: 'text', text: '下の「カードで支払う」からお手続きください。', size: 'sm', color: '#4B5563', wrap: true },
+        { type: 'separator', margin: 'md' },
+        { type: 'text', text: '銀行振込', size: 'md', weight: 'bold', color: '#0B1428', margin: 'md' },
+        { type: 'text', text: '金額: 330,000円\n銀行: ゆうちょ銀行\n支店: 〇一八支店\n種別: 普通\n口座番号: 1843444\n口座名義: コクサイセイキトケイキヨウカイ', size: 'sm', color: '#374151', wrap: true },
+        { type: 'text', text: 'お支払い後に「支払い完了後はこちら」を押してください。', size: 'sm', color: '#9A6A16', weight: 'bold', wrap: true, margin: 'md' },
+      ],
+    },
+    footer: {
+      type: 'box', layout: 'vertical', paddingAll: '16px', spacing: 'sm',
+      contents: [
+        { type: 'button', style: 'primary', color: '#0B1428', action: { type: 'uri', label: 'カードで支払う', uri: 'https://fincs.jp/plan/8030521697119276466/join/personalinfo?planPriceId=742' } },
+        { type: 'button', style: 'secondary', action: { type: 'message', label: '支払い完了後はこちら', text: '支払い完了' } },
+      ],
+    },
+  };
+}
+
+function buildCsaApplicationFormFlex(formUrl: string) {
+  return {
+    type: 'bubble',
+    size: 'mega',
+    header: {
+      type: 'box', layout: 'vertical', backgroundColor: '#0B1428', paddingAll: '18px',
+      contents: [
+        { type: 'text', text: 'Candle Smart Academy', color: '#D7A63D', size: 'xs', weight: 'bold' },
+        { type: 'text', text: '申込フォーム', color: '#FFFFFF', size: 'xl', weight: 'bold', margin: 'sm' },
+      ],
+    },
+    body: {
+      type: 'box', layout: 'vertical', paddingAll: '18px', spacing: 'md',
+      contents: [
+        { type: 'text', text: 'お支払いありがとうございます。', size: 'md', weight: 'bold', color: '#0B1428' },
+        { type: 'text', text: 'お名前・メールアドレス・電話番号・支払方法をフォームへ入力してください。', size: 'sm', color: '#4B5563', wrap: true },
+        { type: 'text', text: '送信後、運営が入金確認を行います。確認には最大24時間かかる場合があります。', size: 'xs', color: '#6B7280', wrap: true },
+      ],
+    },
+    footer: {
+      type: 'box', layout: 'vertical', paddingAll: '16px',
+      contents: [
+        { type: 'button', style: 'primary', color: '#0B1428', action: { type: 'uri', label: '申込フォームを開く', uri: formUrl } },
+      ],
+    },
+  };
 }
 
 async function createCsaFormToken({
