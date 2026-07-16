@@ -509,7 +509,10 @@ async function handleEvent(
 function shouldHandleCsaPaymentIntake(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
-  if (/^(\u6c7a\u6e08|\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized)) return true;
+  // Exact "決済" is owned by the configurable keyword automation so it can
+  // return payment information. Keep the application form shortcut for the
+  // explicit application/join keywords only.
+  if (/^(\u7533\u8fbc|\u7533\u3057\u8fbc\u307f|\u5165\u4f1a|CSA\u7533\u8fbc|CSA\u7533\u3057\u8fbc\u307f)$/i.test(normalized)) return true;
 
   const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(normalized);
   const hasPaymentSignal = /(\u30ab\u30fc\u30c9|\u30af\u30ec\u30ab|\u9280\u884c|\u632f\u8fbc|\u9280\u632f|\u3086\u3046\u3061\u3087|\u5165\u91d1|\u6c7a\u6e08)/.test(normalized);
