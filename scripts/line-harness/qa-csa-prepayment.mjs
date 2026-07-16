@@ -7,12 +7,14 @@ const prepaymentPath = resolve(root, 'apps/worker/src/routes/csa-prepayment.ts')
 const csaRoutePath = resolve(root, 'apps/worker/src/routes/csa.ts');
 const webhookPath = resolve(root, 'apps/worker/src/routes/webhook.ts');
 const migrationPath = resolve(root, 'packages/db/migrations/029_csa_contract_consents.sql');
+const completionMigrationPath = resolve(root, 'packages/db/migrations/030_csa_payment_completion_notices.sql');
 const sourceCopyPath = 'C:/Users/user/.agi-tools/workspaces/persistent-0710-150023/csa-company-sot/COPY_PREPAYMENT_SCREENS_FABLE_2026-07-16.md';
 
 const prepayment = readFileSync(prepaymentPath, 'utf8');
 const csaRoute = readFileSync(csaRoutePath, 'utf8');
 const webhook = readFileSync(webhookPath, 'utf8');
 const migration = readFileSync(migrationPath, 'utf8');
+const completionMigration = readFileSync(completionMigrationPath, 'utf8');
 
 const requiredCopy = [
   'お申込み前の、最終確認です',
@@ -45,12 +47,16 @@ if (!csaRoute.includes("'Cache-Control', 'no-store, no-cache, must-revalidate, m
   failures.push('LIFF routes are missing no-store headers');
 }
 if (!webhook.includes('/api/liff/csa-apply?v=20260716-2')) failures.push('LINE form URL is missing the route cache-buster');
-if (!prepayment.includes("await liff.init({ liffId: LIFF_ID });")) failures.push('LIFF is not initialized before sendMessages');
-if (!prepayment.includes("if (typeof liff === 'undefined' || !liff.isInClient())")) {
-  failures.push('external browsers can falsely show bank-transfer completion');
+if (!prepayment.includes("await liff.init({ liffId: LIFF_ID });")) failures.push('LIFF is not initialized');
+if (prepayment.includes('liff.sendMessages')) failures.push('bank completion still depends on LIFF sendMessages');
+if (!prepayment.includes("fetch('/api/liff/csa-bank-transfer-complete'")) failures.push('bank completion API call is missing');
+if (!csaRoute.includes("csa.post('/api/liff/csa-bank-transfer-complete'")) failures.push('bank completion API route is missing');
+if (!csaRoute.includes("if (!payload.formToken)")) failures.push('bank completion API does not require a signed form token');
+for (const field of ['application_id', 'reported_at', 'user_agent', 'confirmation_sent_at', "UNIQUE (application_id, payment_method)"]) {
+  if (!completionMigration.includes(field)) failures.push(`missing payment completion field: ${field}`);
 }
-if (!prepayment.includes('運営への送信が確認できるまで、この画面では完了扱いにしません。')) {
-  failures.push('external-browser completion blocker copy is missing');
+if (!csaRoute.includes('if (!result.confirmationSentAt)')) {
+  failures.push('failed LINE confirmations cannot be retried safely');
 }
 
 for (const field of [

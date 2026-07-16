@@ -197,7 +197,7 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
           <dt>口座名義</dt><dd>${escapeHtml(CSA_BANK_DETAILS.accountName)}</dd>
         </dl>
         <p>振込手数料はご負担ください。お振込み後に、下のボタンから運営へお知らせください。</p>
-        <button id="bankComplete" type="button">振込手続き完了をLINEで知らせる</button>
+        <button id="bankComplete" type="button">振込手続き完了を運営へ知らせる</button>
       </div>
     </section>
 
@@ -222,6 +222,7 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
     const LOCAL_PREVIEW = ${JSON.stringify(input.localPreview)};
     let lineProfile = null;
     let consentEventId = null;
+    let applicationId = null;
     let applicationSaved = false;
 
     const byId = (id) => document.getElementById(id);
@@ -271,6 +272,7 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
       if (applicationSaved) return;
       consentEventId = consentEventId || crypto.randomUUID();
       if (LOCAL_PREVIEW) {
+        applicationId = 'qa-application-preview';
         applicationSaved = true;
         return;
       }
@@ -301,6 +303,8 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.message || '申込情報と同意記録を保存できませんでした。');
+      if (!data.applicationId) throw new Error('申込IDを確認できませんでした。お支払いへ進まず、運営へお知らせください。');
+      applicationId = data.applicationId;
       applicationSaved = true;
     }
 
@@ -340,16 +344,38 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
     });
 
     byId('bankComplete').addEventListener('click', async () => {
+      const button = byId('bankComplete');
       try {
         clearError('step2Error');
-        if (typeof liff === 'undefined' || !liff.isInClient()) {
-          showError('step2Error', 'LINEアプリに戻り、このトークへ「支払い完了」と送ってください。運営への送信が確認できるまで、この画面では完了扱いにしません。');
+        if (!applicationId || !lineProfile || !lineProfile.userId) {
+          showError('step2Error', '申込情報を確認できませんでした。ページを再読み込みして、銀行振込を選び直してください。');
           return;
         }
-        await liff.sendMessages([{ type: 'text', text: '支払い完了' }]);
+        button.disabled = true;
+        button.textContent = '運営へ通知中...';
+        if (!LOCAL_PREVIEW) {
+          const response = await fetch('/api/liff/csa-bank-transfer-complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              completionEventId: crypto.randomUUID(),
+              lineUserId: lineProfile.userId,
+              applicationId,
+              formToken: FORM_TOKEN,
+              reportedAt: new Date().toISOString(),
+              userAgent: navigator.userAgent,
+            }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || !data.ok || !data.noticeSaved) {
+            throw new Error(data.message || '完了通知を保存できませんでした。');
+          }
+        }
         showStep('step3');
       } catch (error) {
-        showError('step2Error', 'LINEへ送信できませんでした。LINEアプリに戻り、このトークへ「支払い完了」と送ってください。');
+        button.disabled = false;
+        button.textContent = '振込手続き完了を運営へ知らせる';
+        showError('step2Error', error instanceof Error ? error.message : '完了通知を保存できませんでした。もう一度ボタンを押してください。');
       }
     });
 

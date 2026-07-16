@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
 import { jstNow } from '@line-crm/db';
+import { LineClient } from '@line-crm/line-sdk';
 import {
   CSA_COMMERCE_LAW_VERSION,
   CSA_CONTRACT_VERSION,
@@ -195,7 +196,97 @@ csa.post('/api/liff/csa-application', async (c) => {
   return c.json({
     ok: true,
     duplicate: Boolean(result.duplicate),
+    applicationId: result.application_id,
     message: result.message || '申込情報を受け付けました。',
+  });
+});
+
+csa.post('/api/liff/csa-bank-transfer-complete', async (c) => {
+  const payload = (await c.req.json().catch(() => null)) as {
+    completionEventId?: string;
+    lineUserId?: string;
+    applicationId?: string;
+    formToken?: string;
+    reportedAt?: string;
+    userAgent?: string;
+  } | null;
+  if (!payload) {
+    return c.json({ ok: false, message: '完了通知を確認できませんでした。' }, 400);
+  }
+
+  if (!payload.formToken) {
+    return c.json({ ok: false, message: 'LINEから発行された申込リンクを開き直してください。' }, 401);
+  }
+  const tokenPayload = await verifyCsaFormToken(payload.formToken, c.env.API_KEY);
+  if (!tokenPayload) {
+    return c.json({ ok: false, message: '申込リンクの有効期限が切れています。LINEで再度「決済」と送ってください。' }, 401);
+  }
+
+  const lineUserId = clean(payload.lineUserId || tokenPayload?.line_user_id, 120);
+  const applicationId = clean(payload.applicationId, 100);
+  const completionEventId = clean(payload.completionEventId, 80);
+  const reportedAt = normalizeIsoDate(clean(payload.reportedAt, 80));
+  const userAgent = clean(payload.userAgent, 500) || c.req.header('user-agent') || '';
+  if (lineUserId !== tokenPayload.line_user_id) {
+    return c.json({ ok: false, message: 'LINE本人情報が一致しません。' }, 403);
+  }
+  if (!lineUserId || !applicationId || !completionEventId || !reportedAt || !userAgent) {
+    return c.json({ ok: false, message: '完了通知の必須情報が不足しています。' }, 400);
+  }
+
+  const consent = await c.env.DB.prepare(
+    `SELECT id FROM csa_contract_consents
+     WHERE line_user_id = ? AND application_id = ? AND payment_method = 'bank_transfer'
+     ORDER BY created_at DESC LIMIT 1`,
+  ).bind(lineUserId, applicationId).first<{ id: string }>();
+  if (!consent) {
+    return c.json({
+      ok: false,
+      message: '銀行振込の申込記録を確認できませんでした。銀行振込を選び直してください。',
+    }, 409);
+  }
+
+  const result = await recordBankTransferCompletion(c.env.DB, {
+    id: completionEventId,
+    lineUserId,
+    applicationId,
+    reportedAt,
+    userAgent,
+  });
+
+  let lineMessageSent = Boolean(result.confirmationSentAt);
+  if (!result.confirmationSentAt) {
+    try {
+      const confirmationText = bankTransferCompletionMessage();
+      await new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN).pushMessage(
+        lineUserId,
+        [{ type: 'text', text: confirmationText }],
+      );
+      lineMessageSent = true;
+      const confirmationSentAt = jstNow();
+      await c.env.DB.prepare(
+        `UPDATE csa_payment_completion_notices
+         SET confirmation_sent_at = ?
+         WHERE id = ? AND confirmation_sent_at IS NULL`,
+      ).bind(confirmationSentAt, result.noticeId).run();
+      if (result.friend) {
+        await c.env.DB.prepare(
+          `INSERT OR IGNORE INTO messages_log
+           (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, created_at)
+           VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'csa_bank_completion', ?)`,
+        ).bind(`csa-bank-confirmation:${result.noticeId}`, result.friend.id, confirmationText, confirmationSentAt).run();
+      }
+    } catch (error) {
+      console.error('CSA bank completion LINE push failed', error);
+    }
+  }
+
+  return c.json({
+    ok: true,
+    noticeSaved: true,
+    duplicate: !result.created,
+    lineMessageSent,
+    noticeId: result.noticeId,
   });
 });
 
@@ -229,6 +320,94 @@ async function markFriendApplicationSubmitted(
     .prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
     .bind(JSON.stringify(metadata), jstNow(), friend.id)
     .run();
+}
+
+async function recordBankTransferCompletion(
+  db: D1Database,
+  input: {
+    id: string;
+    lineUserId: string;
+    applicationId: string;
+    reportedAt: string;
+    userAgent: string;
+  },
+): Promise<{
+  created: boolean;
+  noticeId: string;
+  confirmationSentAt: string | null;
+  friend: { id: string } | null;
+}> {
+  const insert = await db.prepare(
+    `INSERT INTO csa_payment_completion_notices
+      (id, line_user_id, application_id, payment_method, reported_at, user_agent)
+     VALUES (?, ?, ?, 'bank_transfer', ?, ?)
+     ON CONFLICT DO NOTHING`,
+  ).bind(input.id, input.lineUserId, input.applicationId, input.reportedAt, input.userAgent).run();
+  const created = Number(insert.meta.changes ?? 0) > 0;
+
+  const saved = await db.prepare(
+    `SELECT id, line_user_id, application_id, payment_method, reported_at, user_agent, confirmation_sent_at
+     FROM csa_payment_completion_notices
+     WHERE application_id = ? AND payment_method = 'bank_transfer'`,
+  ).bind(input.applicationId).first<{
+    id: string;
+    line_user_id: string;
+    application_id: string;
+    payment_method: string;
+    reported_at: string;
+    user_agent: string;
+    confirmation_sent_at: string | null;
+  }>();
+  if (
+    !saved
+    || saved.line_user_id !== input.lineUserId
+    || saved.application_id !== input.applicationId
+    || saved.payment_method !== 'bank_transfer'
+  ) {
+    throw new Error('bank transfer completion readback mismatch');
+  }
+
+  const friend = await db.prepare(
+    'SELECT id, metadata FROM friends WHERE line_user_id = ?',
+  ).bind(input.lineUserId).first<{ id: string; metadata: string | null }>();
+  if (friend) {
+    const metadata = safeJson(friend.metadata);
+    metadata.csa_bank_transfer_reported_at = saved.reported_at;
+    metadata.csa_bank_transfer_application_id = saved.application_id;
+    metadata.csa_bank_transfer_notice_id = saved.id;
+    await db.prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+      .bind(JSON.stringify(metadata), jstNow(), friend.id)
+      .run();
+    await db.prepare(
+      `INSERT OR IGNORE INTO messages_log
+       (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, created_at)
+       VALUES (?, ?, 'incoming', 'text', ?, NULL, NULL, 'csa_bank_completion', ?)`,
+    ).bind(
+      `csa-bank-notice:${saved.id}`,
+      friend.id,
+      `銀行振込の手続き完了を申告しました（申込ID: ${saved.application_id}）`,
+      jstNow(),
+    ).run();
+  }
+
+  return {
+    created,
+    noticeId: saved.id,
+    confirmationSentAt: saved.confirmation_sent_at,
+    friend: friend ? { id: friend.id } : null,
+  };
+}
+
+function bankTransferCompletionMessage(): string {
+  return [
+    'お手続きありがとうございます。',
+    '',
+    '銀行振込の完了通知を受け付けました。',
+    '運営がご入金を確認しています。',
+    '確認でき次第、あなた専用のDiscord招待と会員開始のご案内を、このLINEへお送りします。',
+    '',
+    '3営業日を過ぎてもご案内が届かない場合は、このLINEに「ヘルプ」とご返信ください。',
+  ].join('\n');
 }
 
 async function saveContractConsent(
