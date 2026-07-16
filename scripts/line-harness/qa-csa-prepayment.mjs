@@ -45,6 +45,13 @@ if (!csaRoute.includes("'Cache-Control', 'no-store, no-cache, must-revalidate, m
   failures.push('LIFF routes are missing no-store headers');
 }
 if (!webhook.includes('/api/liff/csa-apply?v=20260716-2')) failures.push('LINE form URL is missing the route cache-buster');
+if (!prepayment.includes("await liff.init({ liffId: LIFF_ID });")) failures.push('LIFF is not initialized before sendMessages');
+if (!prepayment.includes("if (typeof liff === 'undefined' || !liff.isInClient())")) {
+  failures.push('external browsers can falsely show bank-transfer completion');
+}
+if (!prepayment.includes('運営への送信が確認できるまで、この画面では完了扱いにしません。')) {
+  failures.push('external-browser completion blocker copy is missing');
+}
 
 for (const field of [
   'displayed_copy_sha256',

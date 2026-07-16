@@ -241,12 +241,14 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
 
     async function init() {
       try {
+        if (LIFF_ID) {
+          await liff.init({ liffId: LIFF_ID });
+        }
         if (TOKEN_LINE_USER_ID) {
           lineProfile = { userId: TOKEN_LINE_USER_ID, displayName: TOKEN_LINE_DISPLAY_NAME };
           return;
         }
         if (!LIFF_ID) throw new Error('LINEの申込リンクが正しくありません。LINEで再度「決済」と送って、届いたフォームから開いてください。');
-        await liff.init({ liffId: LIFF_ID });
         if (!liff.isLoggedIn()) {
           liff.login({ redirectUri: location.href });
           return;
@@ -339,12 +341,15 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
 
     byId('bankComplete').addEventListener('click', async () => {
       try {
-        if (typeof liff !== 'undefined' && liff.isInClient()) {
-          await liff.sendMessages([{ type: 'text', text: '支払い完了' }]);
+        clearError('step2Error');
+        if (typeof liff === 'undefined' || !liff.isInClient()) {
+          showError('step2Error', 'LINEアプリに戻り、このトークへ「支払い完了」と送ってください。運営への送信が確認できるまで、この画面では完了扱いにしません。');
+          return;
         }
+        await liff.sendMessages([{ type: 'text', text: '支払い完了' }]);
         showStep('step3');
       } catch (error) {
-        showError('step2Error', error instanceof Error ? error.message : 'LINEへ送信できませんでした。このLINEに「支払い完了」と送ってください。');
+        showError('step2Error', 'LINEへ送信できませんでした。LINEアプリに戻り、このトークへ「支払い完了」と送ってください。');
       }
     });
 
