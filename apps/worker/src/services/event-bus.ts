@@ -225,6 +225,16 @@ function matchConditions(
     }
   }
 
+  // Dashboard/API schema compatibility: { text, match: 'exact' | 'contains' }
+  if (conditions.text !== undefined) {
+    const incomingText = String(payload.eventData?.text || '').trim();
+    const expectedText = String(conditions.text).trim();
+    const isMatch = conditions.match === 'exact'
+      ? incomingText === expectedText
+      : incomingText.includes(expectedText);
+    if (!isMatch) return false;
+  }
+
   return true;
 }
 
@@ -262,17 +272,21 @@ async function executeAction(
       if (!friend) break;
       const lineClient = new LineClient(lineAccessToken);
       const msgType = action.params.messageType || 'text';
+      const messageContent = action.params.content || action.params.text || '';
+      if (!messageContent) throw new Error('send_message content is required');
       let msg: Message;
       if (msgType === 'flex') {
-        const contents = JSON.parse(action.params.content);
+        const contents = JSON.parse(messageContent);
         msg = { type: 'flex', altText: action.params.altText || extractFlexAltText(contents), contents };
       } else {
-        msg = { type: 'text', text: action.params.content };
+        msg = { type: 'text', text: messageContent };
       }
+      let deliveryType = 'push';
       // Prefer replyMessage (free) when replyToken is available
       if (payload.replyToken) {
         try {
           await lineClient.replyMessage(payload.replyToken, [msg]);
+          deliveryType = 'reply';
           // replyToken is single-use, clear it so subsequent actions fall back to push
           payload.replyToken = undefined;
         } catch (err: unknown) {
@@ -289,6 +303,13 @@ async function executeAction(
       } else {
         await lineClient.pushMessage(friend.line_user_id, [msg]);
       }
+      await db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
+           VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, 'automation', ?)`,
+        )
+        .bind(crypto.randomUUID(), friendId, msgType, messageContent, deliveryType, jstNow())
+        .run();
       break;
     }
 
