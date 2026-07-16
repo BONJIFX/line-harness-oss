@@ -537,9 +537,6 @@ async function handleCsaPaymentIntake(
     let altText: string;
 
     if (isPaymentGuide) {
-      messageContent = JSON.stringify(buildCsaPaymentGuideFlex());
-      altText = 'CSAのお支払い案内です。';
-    } else {
       const formToken = apiKey
         ? await createCsaFormToken({
           lineUserId: friend.line_user_id,
@@ -549,7 +546,10 @@ async function handleCsaPaymentIntake(
         : '';
       const formUrl = baseUrl + '/api/liff/csa-apply' + (formToken ? `?t=${encodeURIComponent(formToken)}` : '');
       messageContent = JSON.stringify(buildCsaApplicationFormFlex(formUrl));
-      altText = '支払い完了後の申込フォームです。';
+      altText = 'CSAのお申込み前の最終確認です。';
+    } else {
+      messageContent = JSON.stringify(buildCsaPostPaymentFlex());
+      altText = 'CSAのお支払い後のご案内です。';
     }
     const message = buildMessage('flex', messageContent, altText);
 
@@ -619,21 +619,42 @@ function buildCsaApplicationFormFlex(formUrl: string) {
       type: 'box', layout: 'vertical', backgroundColor: '#0B1428', paddingAll: '18px',
       contents: [
         { type: 'text', text: 'Candle Smart Academy', color: '#D7A63D', size: 'xs', weight: 'bold' },
-        { type: 'text', text: '申込フォーム', color: '#FFFFFF', size: 'xl', weight: 'bold', margin: 'sm' },
+        { type: 'text', text: 'お申込み前の最終確認', color: '#FFFFFF', size: 'xl', weight: 'bold', margin: 'sm' },
       ],
     },
     body: {
       type: 'box', layout: 'vertical', paddingAll: '18px', spacing: 'md',
       contents: [
-        { type: 'text', text: 'お支払いありがとうございます。', size: 'md', weight: 'bold', color: '#0B1428' },
-        { type: 'text', text: 'お名前・メールアドレス・電話番号・支払方法をフォームへ入力してください。', size: 'sm', color: '#4B5563', wrap: true },
-        { type: 'text', text: '送信後、運営が入金確認を行います。確認には最大24時間かかる場合があります。', size: 'xs', color: '#6B7280', wrap: true },
+        { type: 'text', text: '価格・期間・提供内容・キャンセル条件をご確認ください。', size: 'md', weight: 'bold', color: '#0B1428', wrap: true },
+        { type: 'text', text: '3つの確認項目に同意した後、カードまたは銀行振込を選べます。確認ボタンを押した時点では、お支払いは発生しません。', size: 'sm', color: '#4B5563', wrap: true },
       ],
     },
     footer: {
       type: 'box', layout: 'vertical', paddingAll: '16px',
       contents: [
-        { type: 'button', style: 'primary', color: '#0B1428', action: { type: 'uri', label: '申込フォームを開く', uri: formUrl } },
+        { type: 'button', style: 'primary', color: '#0B1428', action: { type: 'uri', label: '申込条件を確認する', uri: formUrl } },
+      ],
+    },
+  };
+}
+
+function buildCsaPostPaymentFlex() {
+  return {
+    type: 'bubble',
+    size: 'mega',
+    header: {
+      type: 'box', layout: 'vertical', backgroundColor: '#0B1428', paddingAll: '18px',
+      contents: [
+        { type: 'text', text: 'Candle Smart Academy', color: '#D7A63D', size: 'xs', weight: 'bold' },
+        { type: 'text', text: 'お手続きありがとうございます', color: '#FFFFFF', size: 'xl', weight: 'bold', margin: 'sm', wrap: true },
+      ],
+    },
+    body: {
+      type: 'box', layout: 'vertical', paddingAll: '18px', spacing: 'md',
+      contents: [
+        { type: 'text', text: '運営がご入金を確認しています。', size: 'md', weight: 'bold', color: '#0B1428', wrap: true },
+        { type: 'text', text: '確認でき次第、あなた専用の Discord 招待と会員開始のご案内を、この LINE へお送りします。', size: 'sm', color: '#374151', wrap: true },
+        { type: 'text', text: '確認までお時間をいただく場合があります。3営業日を過ぎてもご案内が届かない場合は、このLINEに「ヘルプ」とご返信ください。', size: 'xs', color: '#6B7280', wrap: true },
       ],
     },
   };

@@ -13,6 +13,7 @@
     "db:migrate:local": "wrangler d1 execute line-crm --file=packages/db/schema.sql --local",
     "line:import-followers": "node scripts/line-harness/import-existing-followers.mjs",
     "line:csa-interest-recovery": "node scripts/line-harness/csa-interest-recovery-broadcast.mjs",
+    "qa:csa-prepayment": "node scripts/line-harness/qa-csa-prepayment.mjs",
     "deploy:setup": "node packages/create-line-harness/dist/index.js",
     "deploy:update": "node packages/create-line-harness/dist/index.js update"
   },

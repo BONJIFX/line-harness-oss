@@ -1,29 +1,48 @@
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
 import { jstNow } from '@line-crm/db';
+import {
+  CSA_COMMERCE_LAW_VERSION,
+  CSA_CONTRACT_VERSION,
+  CSA_COPY_SHA256,
+  CSA_COPY_VERSION,
+  CSA_PRIVACY_VERSION,
+  CSA_TERMS_VERSION,
+  renderCsaCommerceLawPage,
+  renderCsaPrepaymentPage,
+  renderCsaPrivacyPage,
+  renderCsaTermsPage,
+} from './csa-prepayment.js';
 
 const csa = new Hono<Env>();
 
 const DEFAULT_CSA_PAYMENT_INTAKE_URL = 'https://csa-members-v2-csa2.vercel.app/api/webhooks/line-harness/payment-completed';
-const CONTRACT_VERSION = 'CSA_CONTRACT_2026_06_15';
 
 csa.get('/api/liff/csa-apply', async (c) => {
   const token = c.req.query('t') || '';
+  const requestUrl = new URL(c.req.url);
+  const localPreview = c.req.query('preview') === '1'
+    && (requestUrl.hostname === '127.0.0.1' || requestUrl.hostname === 'localhost');
   const tokenPayload = token
     ? await verifyCsaFormToken(token, c.env.API_KEY)
     : null;
   const liffId = extractLiffId(c.env.LIFF_URL);
-  return c.html(renderApplyPage({
+  return c.html(renderCsaPrepaymentPage({
     liffId,
-    contractVersion: CONTRACT_VERSION,
     formToken: token,
-    tokenLineUserId: tokenPayload?.line_user_id || '',
-    tokenLineDisplayName: tokenPayload?.line_display_name || '',
+    tokenLineUserId: tokenPayload?.line_user_id || (localPreview ? 'qa-line-user' : ''),
+    tokenLineDisplayName: tokenPayload?.line_display_name || (localPreview ? 'QA Preview' : ''),
+    localPreview,
   }));
 });
 
+csa.get('/api/liff/csa-terms', (c) => c.html(renderCsaTermsPage()));
+csa.get('/api/liff/csa-commerce-law', (c) => c.html(renderCsaCommerceLawPage()));
+csa.get('/api/liff/csa-privacy', (c) => c.html(renderCsaPrivacyPage()));
+
 csa.post('/api/liff/csa-application', async (c) => {
   const payload = (await c.req.json().catch(() => null)) as {
+    consentEventId?: string;
     lineUserId?: string;
     lineDisplayName?: string;
     applicantName?: string;
@@ -32,6 +51,14 @@ csa.post('/api/liff/csa-application', async (c) => {
     phone?: string;
     paymentMethod?: string;
     contractVersion?: string;
+    displayedCopyVersion?: string;
+    displayedCopySha256?: string;
+    termsVersion?: string;
+    commerceLawVersion?: string;
+    privacyPolicyVersion?: string;
+    agreedTerms?: boolean;
+    agreedPrivacy?: boolean;
+    agreedEducationNoResult?: boolean;
     contractAgreedAt?: string;
     userAgent?: string;
     formToken?: string;
@@ -50,6 +77,15 @@ csa.post('/api/liff/csa-application', async (c) => {
   const email = clean(payload.email, 200).toLowerCase();
   const paymentMethod = normalizePaymentMethod(payload.paymentMethod);
   const contractAgreedAt = normalizeIsoDate(clean(payload.contractAgreedAt, 80));
+  const consentEventId = clean(payload.consentEventId, 80);
+  const displayedCopyVersion = clean(payload.displayedCopyVersion, 100);
+  const displayedCopySha256 = clean(payload.displayedCopySha256, 100);
+  const termsVersion = clean(payload.termsVersion, 100);
+  const commerceLawVersion = clean(payload.commerceLawVersion, 100);
+  const privacyPolicyVersion = clean(payload.privacyPolicyVersion, 100);
+  const agreementComplete = payload.agreedTerms === true
+    && payload.agreedPrivacy === true
+    && payload.agreedEducationNoResult === true;
 
   const missing = [
     !lineUserId ? 'LINE認証' : null,
@@ -57,6 +93,13 @@ csa.post('/api/liff/csa-application', async (c) => {
     !email ? 'メールアドレス' : null,
     !paymentMethod ? '決済方法' : null,
     !contractAgreedAt ? '契約同意' : null,
+    !consentEventId ? '同意イベント' : null,
+    !agreementComplete ? '3項目の同意' : null,
+    displayedCopyVersion !== CSA_COPY_VERSION ? '表示本文版' : null,
+    displayedCopySha256 !== CSA_COPY_SHA256 ? '表示本文ハッシュ' : null,
+    termsVersion !== CSA_TERMS_VERSION ? '利用規約版' : null,
+    commerceLawVersion !== CSA_COMMERCE_LAW_VERSION ? '特商法表記版' : null,
+    privacyPolicyVersion !== CSA_PRIVACY_VERSION ? 'プライバシーポリシー版' : null,
   ].filter(Boolean);
 
   if (missing.length > 0) {
@@ -82,7 +125,7 @@ csa.post('/api/liff/csa-application', async (c) => {
       email,
       phone: clean(payload.phone, 30) || null,
       payment_method: paymentMethod,
-      contract_version: clean(payload.contractVersion, 80) || CONTRACT_VERSION,
+      contract_version: clean(payload.contractVersion, 80) || CSA_CONTRACT_VERSION,
       contract_agreed_at: contractAgreedAt,
       user_agent: clean(payload.userAgent, 500) || c.req.header('user-agent') || '',
       event_type: 'line_liff_contract_application',
@@ -105,6 +148,30 @@ csa.post('/api/liff/csa-application', async (c) => {
   }
 
   const confirmedPaymentMethod = paymentMethod as 'card' | 'bank_transfer';
+  try {
+    await saveContractConsent(c.env.DB, {
+      id: consentEventId,
+      lineUserId,
+      lineDisplayName,
+      applicationId: result.application_id,
+      contractVersion: clean(payload.contractVersion, 80) || CSA_CONTRACT_VERSION,
+      displayedCopyVersion,
+      displayedCopySha256,
+      termsVersion,
+      commerceLawVersion,
+      privacyPolicyVersion,
+      contractAgreedAt,
+      paymentMethod: confirmedPaymentMethod,
+      userAgent: clean(payload.userAgent, 500) || c.req.header('user-agent') || '',
+    });
+  } catch (error) {
+    console.error('CSA contract consent save failed', error);
+    return c.json({
+      ok: false,
+      message: '申込情報は受け付けましたが、同意記録を安全に保存できませんでした。お支払いへ進まず、運営へお知らせください。',
+    }, 503);
+  }
+
   await markFriendApplicationSubmitted(c.env.DB, {
     lineUserId,
     applicantName,
@@ -145,12 +212,92 @@ async function markFriendApplicationSubmitted(
   metadata.csa_application_name = input.applicantName;
   metadata.csa_application_email = input.email;
   metadata.csa_payment_method = input.paymentMethod;
-  metadata.csa_contract_version = CONTRACT_VERSION;
+  metadata.csa_contract_version = CSA_CONTRACT_VERSION;
 
   await db
     .prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
     .bind(JSON.stringify(metadata), jstNow(), friend.id)
     .run();
+}
+
+async function saveContractConsent(
+  db: D1Database,
+  input: {
+    id: string;
+    lineUserId: string;
+    lineDisplayName: string;
+    applicationId?: string;
+    contractVersion: string;
+    displayedCopyVersion: string;
+    displayedCopySha256: string;
+    termsVersion: string;
+    commerceLawVersion: string;
+    privacyPolicyVersion: string;
+    contractAgreedAt: string;
+    paymentMethod: 'card' | 'bank_transfer';
+    userAgent: string;
+  },
+) {
+  await db.prepare(
+    `INSERT INTO csa_contract_consents (
+      id, line_user_id, line_display_name, application_id, contract_version,
+      displayed_copy_version, displayed_copy_sha256, terms_version,
+      commerce_law_version, privacy_policy_version, agreed_terms,
+      agreed_privacy, agreed_education_no_result, agreed_at, payment_method,
+      user_agent
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING`,
+  ).bind(
+    input.id,
+    input.lineUserId,
+    input.lineDisplayName || null,
+    input.applicationId || null,
+    input.contractVersion,
+    input.displayedCopyVersion,
+    input.displayedCopySha256,
+    input.termsVersion,
+    input.commerceLawVersion,
+    input.privacyPolicyVersion,
+    input.contractAgreedAt,
+    input.paymentMethod,
+    input.userAgent,
+  ).run();
+
+  const saved = await db.prepare(
+    `SELECT line_user_id, application_id, contract_version, displayed_copy_version,
+      displayed_copy_sha256, agreed_terms, agreed_privacy,
+      agreed_education_no_result, agreed_at, payment_method, user_agent
+    FROM csa_contract_consents WHERE id = ?`,
+  ).bind(input.id).first<{
+    line_user_id: string;
+    application_id: string | null;
+    contract_version: string;
+    displayed_copy_version: string;
+    displayed_copy_sha256: string;
+    agreed_terms: number;
+    agreed_privacy: number;
+    agreed_education_no_result: number;
+    agreed_at: string;
+    payment_method: string;
+    user_agent: string;
+  }>();
+
+  if (
+    !saved
+    || saved.line_user_id !== input.lineUserId
+    || saved.application_id !== (input.applicationId || null)
+    || saved.contract_version !== input.contractVersion
+    || saved.displayed_copy_version !== input.displayedCopyVersion
+    || saved.displayed_copy_sha256 !== input.displayedCopySha256
+    || saved.agreed_terms !== 1
+    || saved.agreed_privacy !== 1
+    || saved.agreed_education_no_result !== 1
+    || saved.agreed_at !== input.contractAgreedAt
+    || saved.payment_method !== input.paymentMethod
+    || saved.user_agent !== input.userAgent
+  ) {
+    throw new Error('contract consent readback mismatch');
+  }
 }
 
 function renderApplyPage({
