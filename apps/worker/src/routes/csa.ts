@@ -15,6 +15,7 @@ import {
   renderCsaPrivacyPage,
   renderCsaTermsPage,
 } from './csa-prepayment.js';
+import { recordCsaFunnelEventSafely } from './csa-funnel.js';
 
 const csa = new Hono<Env>();
 
@@ -29,6 +30,17 @@ csa.get('/api/liff/csa-apply', async (c) => {
   const tokenPayload = token
     ? await verifyCsaFormToken(token, c.env.API_KEY)
     : null;
+  if (tokenPayload) {
+    const openedAt = jstNow();
+    await recordCsaFunnelEventSafely(c.env.DB, {
+      lineUserId: tokenPayload.line_user_id,
+      eventType: 'form_opened',
+      source: 'csa_form_token',
+      occurredAt: openedAt,
+      metadata: { tokenExpiresAt: tokenPayload.exp },
+      dedupeKey: `csa_form_token:${tokenPayload.line_user_id}:${tokenPayload.exp}:form_opened`,
+    }, 'form opened');
+  }
   const liffId = extractLiffId(c.env.LIFF_URL);
   return c.html(renderCsaPrepaymentPage({
     liffId,
@@ -176,6 +188,17 @@ csa.post('/api/liff/csa-application', async (c) => {
       paymentMethod: confirmedPaymentMethod,
       userAgent: clean(payload.userAgent, 500) || c.req.header('user-agent') || '',
     });
+    await recordCsaFunnelEventSafely(c.env.DB, {
+      lineUserId,
+      applicationId: result.application_id || null,
+      eventType: 'form_submitted',
+      paymentMethod: confirmedPaymentMethod,
+      source: 'csa_contract_consents',
+      sourceRef: consentEventId,
+      occurredAt: contractAgreedAt,
+      metadata: { contractVersion: clean(payload.contractVersion, 80) || CSA_CONTRACT_VERSION },
+      dedupeKey: `csa_contract_consents:${consentEventId}:form_submitted`,
+    }, 'form submitted');
   } catch (error) {
     console.error('CSA contract consent save failed', error);
     return c.json({
@@ -389,6 +412,19 @@ async function recordBankTransferCompletion(
       jstNow(),
     ).run();
   }
+
+  await recordCsaFunnelEventSafely(db, {
+    friendId: friend?.id || null,
+    lineUserId: saved.line_user_id,
+    applicationId: saved.application_id,
+    eventType: 'payment_reported',
+    paymentMethod: 'bank_transfer',
+    source: 'csa_payment_completion_notices',
+    sourceRef: saved.id,
+    occurredAt: saved.reported_at,
+    metadata: { confirmationSentAt: saved.confirmation_sent_at },
+    dedupeKey: `csa_payment_completion_notices:${saved.id}:payment_reported`,
+  }, 'bank transfer reported');
 
   return {
     created,

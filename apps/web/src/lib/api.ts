@@ -84,7 +84,84 @@ export type FriendListParams = {
 
 export type FriendWithTags = Friend & { tags: Tag[] }
 
+export type CsaFunnelStage =
+  | 'keyword_received'
+  | 'form_issued'
+  | 'form_opened'
+  | 'form_submitted'
+  | 'payment_pending'
+  | 'payment_reported'
+  | 'payment_verified'
+  | 'onboarding_sent'
+  | 'membership_active'
+  | 'discord_linked'
+
+export type CsaPaymentMethod = 'card' | 'bank_transfer' | null
+
+export type CsaFunnelSummary = {
+  stages: Array<{ key: CsaFunnelStage; label: string; count: number }>
+  conversionRates?: {
+    keywordToFormSubmitted?: number | null
+    formSubmittedToPaymentVerified?: number | null
+    paymentVerifiedToActivated?: number | null
+  }
+  attentionCount: number
+  mismatchCount: number
+  autoReminderEnabled: boolean
+  updatedAt?: string | null
+}
+
+export type CsaFunnelApplicant = {
+  friendId: string | null
+  lineUserId: string
+  displayName: string | null
+  pictureUrl?: string | null
+  currentStage: CsaFunnelStage
+  paymentMethod: CsaPaymentMethod
+  keywordReceivedAt: string | null
+  formIssuedAt?: string | null
+  formOpenedAt: string | null
+  formSubmittedAt: string | null
+  paymentReportedAt: string | null
+  paymentVerifiedAt: string | null
+  onboardingSentAt: string | null
+  membershipActivatedAt: string | null
+  discordLinkedAt: string | null
+  lastContactAt: string | null
+  reminderCount: number
+  lastReminderAt: string | null
+  attentionReason?: string | null
+  attentionLevel?: 'urgent' | 'waiting' | 'normal' | null
+  paymentMismatch?: boolean
+  mismatchWarnings?: string[]
+}
+
+export type CsaFunnelApplicantList = {
+  items: CsaFunnelApplicant[]
+  total: number
+}
+
 export const api = {
+  csaFunnel: {
+    summary: (params?: { campaignKey?: 'current' | 'all' }) => {
+      const query = new URLSearchParams()
+      if (params?.campaignKey) query.set('campaignKey', params.campaignKey)
+      const suffix = query.size > 0 ? `?${query.toString()}` : ''
+      return fetchApi<ApiResponse<CsaFunnelSummary>>(`/api/csa-funnel/summary${suffix}`)
+    },
+    applicants: (params?: { campaignKey?: 'current' | 'all'; stage?: string; paymentMethod?: string; attentionOnly?: boolean; search?: string; limit?: number; offset?: number }) => {
+      const query = new URLSearchParams()
+      if (params?.campaignKey) query.set('campaignKey', params.campaignKey)
+      if (params?.stage) query.set('stage', params.stage)
+      if (params?.paymentMethod) query.set('paymentMethod', params.paymentMethod)
+      if (params?.attentionOnly) query.set('attention', 'true')
+      if (params?.search) query.set('q', params.search)
+      if (params?.limit) query.set('limit', String(params.limit))
+      if (params?.offset) query.set('offset', String(params.offset))
+      const suffix = query.size > 0 ? `?${query.toString()}` : ''
+      return fetchApi<ApiResponse<CsaFunnelApplicantList>>(`/api/csa-funnel/applicants${suffix}`)
+    },
+  },
   friends: {
     list: (params?: FriendListParams) => {
       const query: Record<string, string> = {}

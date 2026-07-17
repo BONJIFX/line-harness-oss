@@ -18,6 +18,7 @@ import {
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
+import { recordCsaFunnelEventSafely } from './csa-funnel.js';
 
 const webhook = new Hono<Env>();
 
@@ -333,7 +334,17 @@ async function handleEvent(
       .bind(logId, friend.id, incomingText, now)
       .run();
 
-    const csaPaymentIntake = await handleCsaPaymentIntake(db, lineClient, event, friend, incomingText, workerUrl, apiKey);
+    const csaPaymentIntake = await handleCsaPaymentIntake(
+      db,
+      lineClient,
+      event,
+      friend,
+      incomingText,
+      logId,
+      now,
+      workerUrl,
+      apiKey,
+    );
     if (csaPaymentIntake.replyTokenConsumed) {
       return;
     }
@@ -522,6 +533,8 @@ async function handleCsaPaymentIntake(
   event: WebhookEvent,
   friend: Awaited<ReturnType<typeof ensureFriendForIncomingMessage>>,
   incomingText: string,
+  incomingMessageId: string,
+  receivedAt: string,
   workerUrl?: string,
   apiKey?: string,
 ): Promise<{ handled: boolean; replyTokenConsumed: boolean }> {
@@ -537,6 +550,16 @@ async function handleCsaPaymentIntake(
     let altText: string;
 
     if (isPaymentGuide) {
+      await recordCsaFunnelEventSafely(db, {
+        friendId: friend.id,
+        lineUserId: friend.line_user_id,
+        eventType: 'keyword_received',
+        source: 'messages_log',
+        sourceRef: incomingMessageId,
+        occurredAt: receivedAt,
+        metadata: { content: normalized },
+        dedupeKey: `messages_log:${incomingMessageId}:keyword_received`,
+      }, 'keyword received');
       const formToken = apiKey
         ? await createCsaFormToken({
           lineUserId: friend.line_user_id,
@@ -549,6 +572,18 @@ async function handleCsaPaymentIntake(
       messageContent = JSON.stringify(buildCsaApplicationFormFlex(formUrl));
       altText = 'CSAのお申込み前の最終確認です。';
     } else {
+      const paymentMethod = inferCsaPaymentMethod(normalized);
+      await recordCsaFunnelEventSafely(db, {
+        friendId: friend.id,
+        lineUserId: friend.line_user_id,
+        eventType: 'payment_reported',
+        paymentMethod,
+        source: 'messages_log',
+        sourceRef: incomingMessageId,
+        occurredAt: receivedAt,
+        metadata: { content: normalized, legacy: true },
+        dedupeKey: `messages_log:${incomingMessageId}:payment_reported`,
+      }, 'legacy payment reported');
       messageContent = JSON.stringify(buildCsaPostPaymentFlex());
       altText = 'CSAのお支払い後のご案内です。';
     }
@@ -556,13 +591,27 @@ async function handleCsaPaymentIntake(
 
     await lineClient.replyMessage(event.replyToken, [message]);
 
+    const outgoingMessageId = crypto.randomUUID();
+    const outgoingAt = jstNow();
     await db
       .prepare(
         `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
          VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'reply', 'csa_payment_intake', ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, messageContent, jstNow())
+      .bind(outgoingMessageId, friend.id, messageContent, outgoingAt)
       .run();
+
+    if (isPaymentGuide) {
+      await recordCsaFunnelEventSafely(db, {
+          friendId: friend.id,
+          lineUserId: friend.line_user_id,
+          eventType: 'form_issued',
+          source: 'messages_log',
+          sourceRef: outgoingMessageId,
+          occurredAt: outgoingAt,
+          dedupeKey: `messages_log:${outgoingMessageId}:form_issued`,
+        }, 'form issued');
+    }
 
     return { handled: true, replyTokenConsumed: true };
   } catch (err) {
@@ -578,6 +627,12 @@ async function handleCsaPaymentIntake(
       return { handled: true, replyTokenConsumed: false };
     }
   }
+}
+
+function inferCsaPaymentMethod(text: string): 'card' | 'bank_transfer' | null {
+  if (/(\u9280\u884c|\u632f\u8fbc|\u9280\u632f|\u3086\u3046\u3061\u3087)/.test(text)) return 'bank_transfer';
+  if (/(\u30ab\u30fc\u30c9|\u30af\u30ec\u30ab)/.test(text)) return 'card';
+  return null;
 }
 
 function buildCsaPaymentGuideFlex() {

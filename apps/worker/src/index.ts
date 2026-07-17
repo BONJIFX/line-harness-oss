@@ -46,6 +46,7 @@ import { trafficPools } from './routes/traffic-pools.js';
 import { meetCallback } from './routes/meet-callback.js';
 import { messageTemplates } from './routes/message-templates.js';
 import { csa } from './routes/csa.js';
+import { csaFunnel } from './routes/csa-funnel.js';
 
 export type Env = {
   Bindings: {
@@ -120,6 +121,7 @@ app.route('/', accountSettings);
 app.route('/', meetCallback);
 app.route('/', messageTemplates);
 app.route('/', csa);
+app.route('/', csaFunnel);
 
 // Self-hosted QR code proxy — prevents leaking ref tokens to third-party services
 app.get('/api/qr', async (c) => {
