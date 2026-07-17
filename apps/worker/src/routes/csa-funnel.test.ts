@@ -6,6 +6,7 @@ import {
   CURRENT_CSA_CAMPAIGN_FROM,
   filterApplicantsByWindow,
   resolveCampaignWindow,
+  type ContactControlRow,
   type FunnelEventRow,
 } from './csa-funnel.js';
 
@@ -94,5 +95,58 @@ describe('CSA application funnel', () => {
 
     expect(applicants[0].paymentVerifiedAt).toBeNull();
     expect(applicants[0].currentStage).toBe('payment_pending');
+  });
+
+  it('creates the first unopened-form candidate for the next day at noon JST', () => {
+    const applicants = buildCsaApplicants([
+      event('line-1', 'keyword_received', '2026-07-17T20:00:00+09:00'),
+      event('line-1', 'form_issued', '2026-07-17T20:01:00+09:00'),
+    ], [], [], [], new Date('2026-07-18T12:00:00+09:00'));
+
+    expect(applicants[0].reminderCandidate).toMatchObject({
+      kind: 'form_not_opened',
+      state: 'due',
+      dueAt: '2026-07-18T12:00:00+09:00',
+      userMessageAllowed: true,
+      templateKey: 'form_not_opened_next_12',
+    });
+  });
+
+  it('suppresses user messaging after payment is reported but not verified', () => {
+    const applicants = buildCsaApplicants([
+      event('line-1', 'keyword_received', '2026-07-17T20:00:00+09:00'),
+      event('line-1', 'form_submitted', '2026-07-17T20:10:00+09:00', 'bank_transfer'),
+      event('line-1', 'payment_reported', '2026-07-17T20:20:00+09:00', 'bank_transfer'),
+    ], [], [], [], new Date('2026-07-18T18:00:00+09:00'));
+
+    expect(applicants[0].reminderCandidate).toMatchObject({
+      kind: 'payment_verification_internal',
+      state: 'internal_only',
+      userMessageAllowed: false,
+    });
+  });
+
+  it('gives an individual pause or do-not-contact setting priority over timing', () => {
+    const baseRows = [
+      event('line-1', 'keyword_received', '2026-07-17T20:00:00+09:00'),
+      event('line-1', 'form_issued', '2026-07-17T20:01:00+09:00'),
+    ];
+    const controls: ContactControlRow[] = [{
+      line_user_id: 'line-1',
+      reminders_enabled: 1,
+      contact_status: 'payment_discussion',
+      pause_until: null,
+      promised_payment_at: null,
+      resume_mode: 'candidate',
+      operator_note: '給料日について相談中',
+      updated_by: 'staff-1',
+      updated_at: '2026-07-18T09:00:00.000Z',
+    }];
+    const paused = buildCsaApplicants(baseRows, [], [], controls, new Date('2026-07-18T18:00:00+09:00'));
+    expect(paused[0].reminderCandidate).toMatchObject({ state: 'paused', userMessageAllowed: false });
+
+    controls[0].contact_status = 'do_not_contact';
+    const disabled = buildCsaApplicants(baseRows, [], [], controls, new Date('2026-07-18T18:00:00+09:00'));
+    expect(disabled[0].reminderCandidate).toMatchObject({ state: 'disabled', userMessageAllowed: false });
   });
 });

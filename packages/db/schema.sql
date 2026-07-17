@@ -809,6 +809,27 @@ INSERT OR IGNORE INTO csa_application_audit_log (
   strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'), 'schema:init'
 );
 
+-- Per-applicant CSA reminder/contact controls. Current values are mutable;
+-- every API change is preserved in csa_application_audit_log.
+CREATE TABLE IF NOT EXISTS csa_application_contact_controls (
+  line_user_id        TEXT PRIMARY KEY,
+  reminders_enabled  INTEGER NOT NULL DEFAULT 1 CHECK (reminders_enabled IN (0, 1)),
+  contact_status      TEXT NOT NULL DEFAULT 'normal' CHECK (contact_status IN (
+    'normal', 'payment_discussion', 'payment_date_set', 'considering',
+    'manual_handling', 'do_not_contact'
+  )),
+  pause_until         TEXT,
+  promised_payment_at TEXT,
+  resume_mode         TEXT NOT NULL DEFAULT 'candidate' CHECK (resume_mode IN ('candidate', 'manual', 'never')),
+  operator_note       TEXT,
+  updated_by          TEXT,
+  created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_csa_contact_controls_status
+  ON csa_application_contact_controls (contact_status, reminders_enabled, pause_until);
+
 -- Reusable message templates (text or Flex) for reward messages in campaigns
 CREATE TABLE IF NOT EXISTS message_templates (
   id TEXT PRIMARY KEY,

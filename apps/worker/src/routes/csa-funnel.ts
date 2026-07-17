@@ -17,6 +17,37 @@ export type CsaFunnelEventType =
 
 type PaymentMethod = 'card' | 'bank_transfer';
 
+export type CsaContactStatus =
+  | 'normal'
+  | 'payment_discussion'
+  | 'payment_date_set'
+  | 'considering'
+  | 'manual_handling'
+  | 'do_not_contact';
+
+export type CsaResumeMode = 'candidate' | 'manual' | 'never';
+
+export type CsaContactControl = {
+  remindersEnabled: boolean;
+  contactStatus: CsaContactStatus;
+  pauseUntil: string | null;
+  promisedPaymentAt: string | null;
+  resumeMode: CsaResumeMode;
+  operatorNote: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+export type CsaReminderCandidate = {
+  kind: 'form_not_opened' | 'form_not_submitted' | 'card_payment_pending' | 'bank_payment_pending'
+    | 'payment_verification_internal' | 'activation_incomplete' | 'none';
+  state: 'due' | 'upcoming' | 'paused' | 'disabled' | 'internal_only' | 'complete' | 'none';
+  dueAt: string | null;
+  reason: string;
+  userMessageAllowed: boolean;
+  templateKey: string | null;
+};
+
 export type CsaApplicantStage =
   | 'keyword_received'
   | 'form_issued'
@@ -52,6 +83,8 @@ export type CsaApplicant = {
   attentionLevel: 'urgent' | 'waiting' | 'normal' | null;
   paymentMismatch: boolean;
   mismatchWarnings: string[];
+  contactControl: CsaContactControl;
+  reminderCandidate: CsaReminderCandidate;
 };
 
 export type FunnelEventRow = {
@@ -78,6 +111,18 @@ export type ReminderCountRow = {
   line_user_id: string;
   sent_count: number;
   last_reminder_at: string | null;
+};
+
+export type ContactControlRow = {
+  line_user_id: string;
+  reminders_enabled: number;
+  contact_status: CsaContactStatus;
+  pause_until: string | null;
+  promised_payment_at: string | null;
+  resume_mode: CsaResumeMode;
+  operator_note: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
 };
 
 const STAGES: Array<{ key: CsaApplicantStage; label: string; timeKey?: keyof CsaApplicant }> = [
@@ -168,6 +213,75 @@ csaFunnel.get('/api/csa-funnel/applicants', async (c) => {
   });
 });
 
+csaFunnel.patch('/api/csa-funnel/applicants/:lineUserId/contact-control', async (c) => {
+  const lineUserId = c.req.param('lineUserId');
+  const exists = await c.env.DB.prepare(
+    'SELECT 1 AS found FROM csa_application_funnel_events WHERE line_user_id = ? LIMIT 1',
+  ).bind(lineUserId).first<{ found: number }>();
+  if (!exists) return c.json({ success: false, error: '申込者が見つかりません' }, 404);
+
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return c.json({ success: false, error: 'JSON形式が正しくありません' }, 400);
+  }
+  const parsed = parseContactControlInput(raw);
+  if (!parsed.ok) return c.json({ success: false, error: parsed.error }, 400);
+
+  const before = await loadContactControl(c.env.DB, lineUserId);
+  const now = new Date().toISOString();
+  const staff = c.get('staff');
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO csa_application_contact_controls (
+         line_user_id, reminders_enabled, contact_status, pause_until,
+         promised_payment_at, resume_mode, operator_note, updated_by, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(line_user_id) DO UPDATE SET
+         reminders_enabled = excluded.reminders_enabled,
+         contact_status = excluded.contact_status,
+         pause_until = excluded.pause_until,
+         promised_payment_at = excluded.promised_payment_at,
+         resume_mode = excluded.resume_mode,
+         operator_note = excluded.operator_note,
+         updated_by = excluded.updated_by,
+         updated_at = excluded.updated_at`,
+    ).bind(
+      lineUserId,
+      parsed.value.remindersEnabled ? 1 : 0,
+      parsed.value.contactStatus,
+      parsed.value.pauseUntil,
+      parsed.value.promisedPaymentAt,
+      parsed.value.resumeMode,
+      parsed.value.operatorNote,
+      staff.id,
+      now,
+    ),
+    c.env.DB.prepare(
+      `INSERT INTO csa_application_audit_log (
+         id, line_user_id, actor_staff_id, action, before_json, after_json,
+         reason, occurred_at, request_id
+       ) VALUES (?, ?, ?, 'contact_control_updated', ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      lineUserId,
+      staff.id,
+      JSON.stringify(before),
+      JSON.stringify(parsed.value),
+      parsed.value.operatorNote || '個別連絡設定を更新',
+      now,
+      c.req.header('cf-ray') || c.req.header('x-request-id') || crypto.randomUUID(),
+    ),
+  ]);
+
+  const saved = await loadContactControl(c.env.DB, lineUserId);
+  if (!saved || saved.updatedAt !== now) {
+    return c.json({ success: false, error: '保存後の読戻しに失敗しました' }, 500);
+  }
+  return c.json({ success: true, data: saved });
+});
+
 export async function recordCsaFunnelEvent(
   db: D1Database,
   input: RecordCsaFunnelEventInput,
@@ -237,9 +351,12 @@ export function buildCsaApplicants(
   events: FunnelEventRow[],
   verifications: PaymentVerificationRow[] = [],
   reminderCounts: ReminderCountRow[] = [],
+  contactControls: ContactControlRow[] = [],
+  now = new Date(),
 ): CsaApplicant[] {
   const byLineUser = new Map<string, CsaApplicant & { paymentMethods: Set<PaymentMethod>; eventReminderCount: number }>();
   const dbReminderCounts = new Map(reminderCounts.map((row) => [row.line_user_id, row]));
+  const controls = new Map(contactControls.map((row) => [row.line_user_id, mapContactControl(row)]));
 
   for (const event of [...events].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))) {
     const applicant = byLineUser.get(event.line_user_id) || createApplicant(event);
@@ -285,6 +402,8 @@ export function buildCsaApplicants(
     applicant.mismatchWarnings = applicant.paymentMismatch
       ? [`payment methods do not match: ${[...applicant.paymentMethods].sort().join(', ')}`]
       : [];
+    applicant.contactControl = controls.get(applicant.lineUserId) || defaultContactControl();
+    applicant.reminderCandidate = buildReminderCandidate(applicant, now);
     const { paymentMethods: _paymentMethods, eventReminderCount: _eventReminderCount, ...result } = applicant;
     return result;
   }).sort((a, b) => b.lastContactAt.localeCompare(a.lastContactAt));
@@ -318,7 +437,7 @@ export function buildCsaFunnelSummary(applicants: CsaApplicant[]) {
 }
 
 async function loadApplicants(db: D1Database, from: string | null, to: string | null): Promise<CsaApplicant[]> {
-  const [eventsResult, verificationsResult, remindersResult] = await Promise.all([
+  const [eventsResult, verificationsResult, remindersResult, controlsResult] = await Promise.all([
     db.prepare(
       `SELECT e.id, e.friend_id, e.line_user_id, e.application_id, e.event_type,
               e.payment_method, e.occurred_at, f.display_name, f.picture_url
@@ -343,8 +462,13 @@ async function loadApplicants(db: D1Database, from: string | null, to: string | 
          AND (? IS NULL OR julianday(sent_at) <= julianday(?))
        GROUP BY line_user_id`,
     ).bind(from, from, to, to).all<ReminderCountRow>(),
+    db.prepare(
+      `SELECT line_user_id, reminders_enabled, contact_status, pause_until,
+              promised_payment_at, resume_mode, operator_note, updated_by, updated_at
+       FROM csa_application_contact_controls`,
+    ).all<ContactControlRow>(),
   ]);
-  return buildCsaApplicants(eventsResult.results, verificationsResult.results, remindersResult.results);
+  return buildCsaApplicants(eventsResult.results, verificationsResult.results, remindersResult.results, controlsResult.results);
 }
 
 function createApplicant(event: FunnelEventRow) {
@@ -371,9 +495,175 @@ function createApplicant(event: FunnelEventRow) {
     attentionLevel: null,
     paymentMismatch: false,
     mismatchWarnings: [],
+    contactControl: defaultContactControl(),
+    reminderCandidate: emptyReminderCandidate(),
     paymentMethods: new Set<PaymentMethod>(),
     eventReminderCount: 0,
   };
+}
+
+export function buildReminderCandidate(applicant: CsaApplicant, now = new Date()): CsaReminderCandidate {
+  const control = applicant.contactControl || defaultContactControl();
+  if (applicant.paymentVerifiedAt && applicant.membershipActivatedAt) {
+    return candidate('none', 'complete', null, '決済確認と会員登録が完了しています', false, null);
+  }
+  if (!control.remindersEnabled || control.contactStatus === 'do_not_contact' || control.resumeMode === 'never') {
+    return candidate('none', 'disabled', null, '個別設定で連絡対象外です', false, null);
+  }
+
+  const nowMs = now.getTime();
+  const pauseUntil = parseJstDate(control.pauseUntil);
+  if (pauseUntil !== null && pauseUntil > nowMs) {
+    return candidate('none', 'paused', toJstIso(pauseUntil), '指定日時まで停止中です', false, null);
+  }
+  const promisedAt = parseJstDate(control.promisedPaymentAt);
+  if (promisedAt !== null && promisedAt > nowMs) {
+    return candidate('none', 'paused', toJstIso(promisedAt), '支払予定日まで連絡を停止しています', false, null);
+  }
+  if (
+    control.resumeMode === 'manual'
+    || control.contactStatus === 'manual_handling'
+    || control.contactStatus === 'considering'
+    || control.contactStatus === 'payment_discussion'
+    || control.contactStatus === 'payment_date_set'
+  ) {
+    return candidate('none', 'paused', null, '手動対応中です', false, null);
+  }
+  if (applicant.paymentReportedAt && !applicant.paymentVerifiedAt) {
+    return candidate('payment_verification_internal', 'internal_only', null, '支払申告済み。本人には送らず運営が決済確認します', false, 'internal_payment_verification');
+  }
+
+  let kind: CsaReminderCandidate['kind'] = 'none';
+  let dueMs: number | null = null;
+  let templateKey: string | null = null;
+  let reason = '現在の段階にリマインド候補はありません';
+  if (applicant.onboardingSentAt && !applicant.membershipActivatedAt) {
+    kind = 'activation_incomplete';
+    dueMs = localDayAt(applicant.onboardingSentAt, 3, 18);
+    templateKey = 'activation_incomplete_3d';
+    reason = '会員登録案内から3日後の18時に確認';
+  } else if (applicant.formSubmittedAt && !applicant.paymentVerifiedAt) {
+    kind = applicant.paymentMethod === 'bank_transfer' ? 'bank_payment_pending' : 'card_payment_pending';
+    dueMs = localDayAt(applicant.formSubmittedAt, 1, 18);
+    templateKey = applicant.paymentMethod === 'bank_transfer' ? 'bank_payment_pending_next_18' : 'card_payment_pending_next_18';
+    reason = 'フォーム送信の翌日18時に支払状況を確認';
+  } else if (applicant.formOpenedAt && !applicant.formSubmittedAt) {
+    kind = 'form_not_submitted';
+    const extraDays = applicant.reminderCount > 0 ? 2 : 1;
+    dueMs = localDayAt(applicant.formOpenedAt, extraDays, applicant.reminderCount > 0 ? 18 : 12);
+    templateKey = applicant.reminderCount > 0 ? 'form_not_submitted_final' : 'form_not_submitted_next_12';
+    reason = applicant.reminderCount > 0 ? '初回確認後も未送信のため翌々日18時に最終確認' : 'フォーム閲覧の翌日12時に確認';
+  } else if (applicant.formIssuedAt && !applicant.formOpenedAt) {
+    kind = 'form_not_opened';
+    dueMs = localDayAt(applicant.formIssuedAt, 1, 12);
+    templateKey = 'form_not_opened_next_12';
+    reason = '「決済」キーワード送信後、フォーム未閲覧なら翌日12時に確認';
+  }
+
+  if (dueMs === null) return candidate(kind, 'none', null, reason, false, templateKey);
+  if (applicant.reminderCount >= 2) return candidate(kind, 'disabled', toJstIso(dueMs), 'リマインド上限2回に達しています', false, templateKey);
+  return candidate(kind, dueMs <= nowMs ? 'due' : 'upcoming', toJstIso(dueMs), reason, true, templateKey);
+}
+
+function candidate(
+  kind: CsaReminderCandidate['kind'],
+  state: CsaReminderCandidate['state'],
+  dueAt: string | null,
+  reason: string,
+  userMessageAllowed: boolean,
+  templateKey: string | null,
+): CsaReminderCandidate {
+  return { kind, state, dueAt, reason, userMessageAllowed, templateKey };
+}
+
+function emptyReminderCandidate(): CsaReminderCandidate {
+  return candidate('none', 'none', null, '未判定', false, null);
+}
+
+function defaultContactControl(): CsaContactControl {
+  return {
+    remindersEnabled: true,
+    contactStatus: 'normal',
+    pauseUntil: null,
+    promisedPaymentAt: null,
+    resumeMode: 'candidate',
+    operatorNote: null,
+    updatedBy: null,
+    updatedAt: null,
+  };
+}
+
+function mapContactControl(row: ContactControlRow): CsaContactControl {
+  return {
+    remindersEnabled: row.reminders_enabled === 1,
+    contactStatus: row.contact_status,
+    pauseUntil: row.pause_until,
+    promisedPaymentAt: row.promised_payment_at,
+    resumeMode: row.resume_mode,
+    operatorNote: row.operator_note,
+    updatedBy: row.updated_by,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function loadContactControl(db: D1Database, lineUserId: string): Promise<CsaContactControl | null> {
+  const row = await db.prepare(
+    `SELECT line_user_id, reminders_enabled, contact_status, pause_until,
+            promised_payment_at, resume_mode, operator_note, updated_by, updated_at
+     FROM csa_application_contact_controls WHERE line_user_id = ?`,
+  ).bind(lineUserId).first<ContactControlRow>();
+  return row ? mapContactControl(row) : null;
+}
+
+function parseContactControlInput(raw: unknown): { ok: true; value: CsaContactControl } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: '設定内容が正しくありません' };
+  const value = raw as Record<string, unknown>;
+  const statuses: CsaContactStatus[] = ['normal', 'payment_discussion', 'payment_date_set', 'considering', 'manual_handling', 'do_not_contact'];
+  const resumeModes: CsaResumeMode[] = ['candidate', 'manual', 'never'];
+  if (typeof value.remindersEnabled !== 'boolean') return { ok: false, error: 'リマインドON/OFFを指定してください' };
+  if (!statuses.includes(value.contactStatus as CsaContactStatus)) return { ok: false, error: '対応状態が正しくありません' };
+  if (!resumeModes.includes(value.resumeMode as CsaResumeMode)) return { ok: false, error: '再開方法が正しくありません' };
+  const pauseUntil = nullableIso(value.pauseUntil);
+  const promisedPaymentAt = nullableIso(value.promisedPaymentAt);
+  if (pauseUntil === undefined || promisedPaymentAt === undefined) return { ok: false, error: '日時の形式が正しくありません' };
+  if (value.operatorNote !== null && value.operatorNote !== undefined && typeof value.operatorNote !== 'string') return { ok: false, error: '運営メモが正しくありません' };
+  const operatorNote = typeof value.operatorNote === 'string' ? value.operatorNote.trim() : null;
+  if (operatorNote && operatorNote.length > 1000) return { ok: false, error: '運営メモは1000文字以内にしてください' };
+  return { ok: true, value: {
+    remindersEnabled: value.remindersEnabled,
+    contactStatus: value.contactStatus as CsaContactStatus,
+    pauseUntil,
+    promisedPaymentAt,
+    resumeMode: value.resumeMode as CsaResumeMode,
+    operatorNote: operatorNote || null,
+    updatedBy: null,
+    updatedAt: null,
+  } };
+}
+
+function nullableIso(value: unknown): string | null | undefined {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) return undefined;
+  return new Date(value).toISOString();
+}
+
+function parseJstDate(value: string | null): number | null {
+  if (!value) return null;
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}+09:00`;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function localDayAt(anchor: string, addDays: number, hour: number): number | null {
+  const anchorMs = parseJstDate(anchor);
+  if (anchorMs === null) return null;
+  const jst = new Date(anchorMs + 9 * 60 * 60 * 1000);
+  return Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate() + addDays, hour - 9, 0, 0, 0);
+}
+
+function toJstIso(value: number): string {
+  const shifted = new Date(value + 9 * 60 * 60 * 1000).toISOString().replace('Z', '');
+  return `${shifted.slice(0, 19)}+09:00`;
 }
 
 function setLatestTime(applicant: CsaApplicant, key: keyof CsaApplicant, occurredAt: string) {

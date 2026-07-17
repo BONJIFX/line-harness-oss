@@ -98,6 +98,29 @@ export type CsaFunnelStage =
 
 export type CsaPaymentMethod = 'card' | 'bank_transfer' | null
 
+export type CsaContactStatus = 'normal' | 'payment_discussion' | 'payment_date_set' | 'considering' | 'manual_handling' | 'do_not_contact'
+export type CsaResumeMode = 'candidate' | 'manual' | 'never'
+
+export type CsaContactControl = {
+  remindersEnabled: boolean
+  contactStatus: CsaContactStatus
+  pauseUntil: string | null
+  promisedPaymentAt: string | null
+  resumeMode: CsaResumeMode
+  operatorNote: string | null
+  updatedBy: string | null
+  updatedAt: string | null
+}
+
+export type CsaReminderCandidate = {
+  kind: 'form_not_opened' | 'form_not_submitted' | 'card_payment_pending' | 'bank_payment_pending' | 'payment_verification_internal' | 'activation_incomplete' | 'none'
+  state: 'due' | 'upcoming' | 'paused' | 'disabled' | 'internal_only' | 'complete' | 'none'
+  dueAt: string | null
+  reason: string
+  userMessageAllowed: boolean
+  templateKey: string | null
+}
+
 export type CsaFunnelSummary = {
   stages: Array<{ key: CsaFunnelStage; label: string; count: number }>
   conversionRates?: {
@@ -134,6 +157,8 @@ export type CsaFunnelApplicant = {
   attentionLevel?: 'urgent' | 'waiting' | 'normal' | null
   paymentMismatch?: boolean
   mismatchWarnings?: string[]
+  contactControl: CsaContactControl
+  reminderCandidate: CsaReminderCandidate
 }
 
 export type CsaFunnelApplicantList = {
@@ -161,6 +186,11 @@ export const api = {
       const suffix = query.size > 0 ? `?${query.toString()}` : ''
       return fetchApi<ApiResponse<CsaFunnelApplicantList>>(`/api/csa-funnel/applicants${suffix}`)
     },
+    updateContactControl: (lineUserId: string, data: Pick<CsaContactControl, 'remindersEnabled' | 'contactStatus' | 'pauseUntil' | 'promisedPaymentAt' | 'resumeMode' | 'operatorNote'>) =>
+      fetchApi<ApiResponse<CsaContactControl>>(`/api/csa-funnel/applicants/${encodeURIComponent(lineUserId)}/contact-control`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
   },
   friends: {
     list: (params?: FriendListParams) => {
