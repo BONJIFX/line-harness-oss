@@ -15,6 +15,7 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { BONJI_EMERGENCY_OVERRIDE, hasBonjiEmergencyOverride, isMemberDeliveryWindow } from '../services/member-delivery-window.js';
 
 const chats = new Hono<Env>();
 
@@ -426,6 +427,9 @@ chats.post('/api/chats/:id/loading', async (c) => {
 // オペレーターからメッセージ送信
 chats.post('/api/chats/:id/send', async (c) => {
   try {
+    if (!isMemberDeliveryWindow() && !hasBonjiEmergencyOverride(c.req.header('X-BONJI-Emergency-Override'))) {
+      return c.json({ success: false, held: true, error: 'member delivery is held outside 08:00-21:00 JST', emergencyOverrideHeader: BONJI_EMERGENCY_OVERRIDE }, 409);
+    }
     const chatId = c.req.param('id');
     const chat = await resolveOrCreateChat(c.env.DB, chatId);
     if (!chat) return c.json({ success: false, error: 'Chat not found' }, 404);

@@ -15,11 +15,13 @@ import {
 } from '@line-crm/db';
 import type { LineClient, Message } from '@line-crm/line-sdk';
 import { addJitter, sleep } from './stealth.js';
+import { isMemberDeliveryWindow } from './member-delivery-window.js';
 
 export async function processReminderDeliveries(
   db: D1Database,
   lineClient: LineClient,
 ): Promise<void> {
+  if (!isMemberDeliveryWindow()) return;
   const now = jstNow();
   const dueReminders = await getDueReminderDeliveries(db, now);
 

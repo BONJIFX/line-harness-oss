@@ -9,6 +9,7 @@ import {
 import type { Broadcast as DbBroadcast, BroadcastMessageType, BroadcastTargetType } from '@line-crm/db';
 import { LineClient } from '@line-crm/line-sdk';
 import { processBroadcastSend, buildMessage } from '../services/broadcast.js';
+import { BONJI_EMERGENCY_OVERRIDE, hasBonjiEmergencyOverride, isMemberDeliveryWindow, nextMemberDeliveryWindowStart } from '../services/member-delivery-window.js';
 import { processSegmentSend } from '../services/segment-send.js';
 import type { SegmentCondition } from '../services/segment-query.js';
 import { getLineAccountById } from '@line-crm/db';
@@ -193,6 +194,13 @@ broadcasts.post('/api/broadcasts/:id/send', async (c) => {
       return c.json({ success: false, error: 'Broadcast is already sent or sending' }, 400);
     }
 
+    if (!isMemberDeliveryWindow() && !hasBonjiEmergencyOverride(c.req.header('X-BONJI-Emergency-Override'))) {
+      const resumeAt = nextMemberDeliveryWindowStart();
+      await c.env.DB.prepare(`UPDATE broadcasts SET status = 'scheduled', scheduled_at = ? WHERE id = ?`)
+        .bind(resumeAt, id).run();
+      return c.json({ success: true, held: true, resumeAt, emergencyOverrideHeader: BONJI_EMERGENCY_OVERRIDE }, 202);
+    }
+
     // target_type='tag' で対象が多い場合はキュー方式
     if (existing.target_type === 'tag' && existing.target_tag_id) {
       const { getFriendsByTag } = await import('@line-crm/db');
@@ -241,6 +249,12 @@ broadcasts.post('/api/broadcasts/:id/send-segment', async (c) => {
 
     if (existing.status === 'sending' || existing.status === 'sent') {
       return c.json({ success: false, error: 'Broadcast is already sent or sending' }, 400);
+    }
+    if (!isMemberDeliveryWindow() && !hasBonjiEmergencyOverride(c.req.header('X-BONJI-Emergency-Override'))) {
+      const resumeAt = nextMemberDeliveryWindowStart();
+      await c.env.DB.prepare(`UPDATE broadcasts SET status = 'scheduled', scheduled_at = ? WHERE id = ?`)
+        .bind(resumeAt, id).run();
+      return c.json({ success: true, held: true, resumeAt, emergencyOverrideHeader: BONJI_EMERGENCY_OVERRIDE }, 202);
     }
 
     const body = await c.req.json<{ conditions: SegmentCondition }>();
@@ -389,6 +403,9 @@ broadcasts.post('/api/broadcasts/:id/fetch-insight', async (c) => {
 broadcasts.post('/api/broadcasts/:id/test-send', async (c) => {
   const id = c.req.param('id');
   try {
+    if (!isMemberDeliveryWindow() && !hasBonjiEmergencyOverride(c.req.header('X-BONJI-Emergency-Override'))) {
+      return c.json({ success: false, held: true, error: 'member delivery is held outside 08:00-21:00 JST', emergencyOverrideHeader: BONJI_EMERGENCY_OVERRIDE }, 409);
+    }
     const broadcast = await getBroadcastById(c.env.DB, id);
     if (!broadcast) return c.json({ success: false, error: 'Broadcast not found' }, 404);
     if (broadcast.status !== 'draft') {

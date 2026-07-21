@@ -14,6 +14,7 @@ import type { Broadcast } from '@line-crm/db';
 import type { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { calculateStaggerDelay, sleep, addMessageVariation } from './stealth.js';
+import { isMemberDeliveryWindow } from './member-delivery-window.js';
 
 const MULTICAST_BATCH_SIZE = 500;
 
@@ -119,6 +120,7 @@ export async function processScheduledBroadcasts(
   lineClient: LineClient,
   workerUrl?: string,
 ): Promise<void> {
+  if (!isMemberDeliveryWindow()) return;
   const allBroadcasts = await getBroadcasts(db);
 
   const nowMs = Date.now();
@@ -173,6 +175,7 @@ export async function processQueuedBroadcasts(
   lineClient: LineClient,
   workerUrl?: string,
 ): Promise<void> {
+  if (!isMemberDeliveryWindow()) return;
   const queued = await getQueuedBroadcasts(db);
   for (const broadcast of queued) {
     // アカウント別のlineClientを解決

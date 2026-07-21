@@ -16,6 +16,7 @@ import { LineClient } from '@line-crm/line-sdk';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
+import { BONJI_EMERGENCY_OVERRIDE, hasBonjiEmergencyOverride, isMemberDeliveryWindow } from '../services/member-delivery-window.js';
 
 const friends = new Hono<Env>();
 
@@ -677,6 +678,9 @@ friends.get('/api/friends/:id/messages', async (c) => {
 // POST /api/friends/:id/messages - send message to friend
 friends.post('/api/friends/:id/messages', async (c) => {
   try {
+    if (!isMemberDeliveryWindow() && !hasBonjiEmergencyOverride(c.req.header('X-BONJI-Emergency-Override'))) {
+      return c.json({ success: false, held: true, error: 'member delivery is held outside 08:00-21:00 JST', emergencyOverrideHeader: BONJI_EMERGENCY_OVERRIDE }, 409);
+    }
     const friendId = c.req.param('id');
     const body = await c.req.json<{
       messageType?: string;

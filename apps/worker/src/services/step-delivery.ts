@@ -11,6 +11,7 @@ import {
 import type { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { jitterDeliveryTime, addJitter, sleep } from './stealth.js';
+import { isMemberDeliveryWindow } from './member-delivery-window.js';
 
 /**
  * Replace template variables in message content.
@@ -88,9 +89,9 @@ export async function resolveMetadata(
   return {};
 }
 
-/** Default delivery window: 9:00-23:00 JST. If outside, push to next 9:00 AM. */
-const DEFAULT_START_HOUR = 9;
-const DEFAULT_END_HOUR = 23;
+/** Member delivery window: 8:00-21:00 JST. Outside work is held for the next window. */
+const DEFAULT_START_HOUR = 8;
+const DEFAULT_END_HOUR = 21;
 
 function enforceDeliveryWindow(date: Date, preferredHour?: number): Date {
   // date is already shifted to JST epoch (+9h)
@@ -116,6 +117,7 @@ export async function processStepDeliveries(
   lineClient: LineClient,
   workerUrl?: string,
 ): Promise<void> {
+  if (!isMemberDeliveryWindow()) return;
   // Skip delivery outside 9:00-23:00 JST window
   const jstHour = new Date(Date.now() + 9 * 60 * 60_000).getUTCHours();
   if (jstHour < DEFAULT_START_HOUR || jstHour >= DEFAULT_END_HOUR) return;

@@ -35,6 +35,11 @@ export interface EventPayload {
   replyToken?: string;
 }
 
+export interface EventRuntime {
+  workerUrl?: string;
+  formSecret?: string;
+}
+
 /**
  * Fire an event and run all registered handlers.
  *
@@ -50,6 +55,7 @@ export async function fireEvent(
   payload: EventPayload,
   lineAccessToken?: string,
   lineAccountId?: string | null,
+  runtime?: EventRuntime,
 ): Promise<void> {
   // Phase 1: fire webhooks, apply scoring rules, and ad conversion postback concurrently.
   const phase1: Promise<unknown>[] = [
@@ -76,7 +82,7 @@ export async function fireEvent(
 
   // Phase 2: evaluate automations and create notifications concurrently.
   await Promise.allSettled([
-    processAutomations(db, eventType, enrichedPayload, lineAccessToken, lineAccountId),
+    processAutomations(db, eventType, enrichedPayload, lineAccessToken, lineAccountId, runtime),
     processNotifications(db, eventType, enrichedPayload, lineAccountId),
   ]);
 }
@@ -147,6 +153,7 @@ async function processAutomations(
   payload: EventPayload,
   lineAccessToken?: string,
   lineAccountId?: string | null,
+  runtime?: EventRuntime,
 ): Promise<void> {
   try {
     const allAutomations = await getActiveAutomationsByEvent(db, eventType);
@@ -166,7 +173,7 @@ async function processAutomations(
 
       for (const action of actions) {
         try {
-          await executeAction(db, action, payload, lineAccessToken);
+          await executeAction(db, action, payload, lineAccessToken, runtime);
           results.push({ action: action.type, success: true });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -244,6 +251,7 @@ async function executeAction(
   action: { type: string; params: Record<string, string> },
   payload: EventPayload,
   lineAccessToken?: string,
+  runtime?: EventRuntime,
 ): Promise<void> {
   const friendId = payload.friendId;
   if (!friendId && action.type !== 'send_webhook') {
@@ -251,6 +259,39 @@ async function executeAction(
   }
 
   switch (action.type) {
+    case 'csa_payment_intake': {
+      if (!lineAccessToken || !friendId) throw new Error('LINE access token and friendId are required');
+      if (!runtime?.workerUrl || !runtime?.formSecret) throw new Error('CSA payment intake runtime is unavailable');
+      const friend = await db
+        .prepare('SELECT line_user_id, display_name FROM friends WHERE id = ?')
+        .bind(friendId)
+        .first<{ line_user_id: string; display_name: string | null }>();
+      if (!friend) throw new Error('friend not found');
+      const { buildCsaApplicationFormFlex, createCsaFormToken } = await import('../routes/webhook.js');
+      const token = await createCsaFormToken({
+        lineUserId: friend.line_user_id,
+        lineDisplayName: friend.display_name || '',
+        secret: runtime.formSecret,
+      });
+      const formUrl = `${runtime.workerUrl.replace(/\/$/, '')}/api/liff/csa-apply?v=20260716-2&t=${encodeURIComponent(token)}`;
+      const contents = buildCsaApplicationFormFlex(formUrl);
+      const message: Message = { type: 'flex', altText: 'CSAのお申込み前の最終確認です', contents };
+      const client = new LineClient(lineAccessToken);
+      let deliveryType = 'push';
+      if (payload.replyToken) {
+        await client.replyMessage(payload.replyToken, [message]);
+        payload.replyToken = undefined;
+        deliveryType = 'reply';
+      } else {
+        await client.pushMessage(friend.line_user_id, [message]);
+      }
+      await db.prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
+         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, ?, 'csa_payment_intake_automation', ?)`,
+      ).bind(crypto.randomUUID(), friendId, JSON.stringify(contents), deliveryType, jstNow()).run();
+      break;
+    }
+
     case 'add_tag':
       await addTagToFriend(db, friendId!, action.params.tagId);
       break;

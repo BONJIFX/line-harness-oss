@@ -199,11 +199,11 @@ async function handleEvent(
                 if (secondStep) {
                   const nextDeliveryDate = new Date(Date.now() + 9 * 60 * 60_000);
                   nextDeliveryDate.setMinutes(nextDeliveryDate.getMinutes() + secondStep.delay_minutes);
-                  // Enforce 9:00-21:00 JST delivery window
+                  // Enforce 8:00-21:00 JST delivery window
                   const h = nextDeliveryDate.getUTCHours();
-                  if (h < 9 || h >= 21) {
+                  if (h < 8 || h >= 21) {
                     if (h >= 21) nextDeliveryDate.setUTCDate(nextDeliveryDate.getUTCDate() + 1);
-                    nextDeliveryDate.setUTCHours(9, 0, 0, 0);
+                    nextDeliveryDate.setUTCHours(8, 0, 0, 0);
                   }
                   await advanceFriendScenario(db, friendScenario.id, firstStep.step_order, nextDeliveryDate.toISOString().slice(0, -1) + '+09:00');
                 } else {
@@ -511,7 +511,7 @@ async function handleEvent(
       friendId: friend.id,
       eventData: { text: incomingText, matched },
       replyToken: replyTokenConsumed ? undefined : event.replyToken,
-    }, lineAccessToken, lineAccountId);
+    }, lineAccessToken, lineAccountId, { workerUrl, formSecret: apiKey });
 
     return;
   }
@@ -667,7 +667,7 @@ function buildCsaPaymentGuideFlex() {
   };
 }
 
-function buildCsaApplicationFormFlex(formUrl: string) {
+export function buildCsaApplicationFormFlex(formUrl: string) {
   return {
     type: 'bubble',
     size: 'mega',
@@ -716,7 +716,7 @@ function buildCsaPostPaymentFlex() {
   };
 }
 
-async function createCsaFormToken({
+export async function createCsaFormToken({
   lineUserId,
   lineDisplayName,
   secret,
