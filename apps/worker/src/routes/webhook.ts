@@ -653,7 +653,7 @@ function buildCsaPaymentGuideFlex() {
         { type: 'text', text: '下の「カードで支払う」からお手続きください。', size: 'sm', color: '#4B5563', wrap: true },
         { type: 'separator', margin: 'md' },
         { type: 'text', text: '銀行振込', size: 'md', weight: 'bold', color: '#0B1428', margin: 'md' },
-        { type: 'text', text: '金額: 330,000円\n銀行: ゆうちょ銀行\n支店: 〇一八支店\n種別: 普通\n口座番号: 1843444\n口座名義: コクサイセイキトケイキヨウカイ', size: 'sm', color: '#374151', wrap: true },
+        { type: 'text', text: '金額: 330,000円\n銀行: ゆうちょ銀行\n支店: 〇九八支店\n種別: 普通\n口座番号: 1843444\n口座名義: コクサイセイキトケイキヨウカイ', size: 'sm', color: '#374151', wrap: true },
         { type: 'text', text: 'お支払い後に「支払い完了後はこちら」を押してください。', size: 'sm', color: '#9A6A16', weight: 'bold', wrap: true, margin: 'md' },
       ],
     },

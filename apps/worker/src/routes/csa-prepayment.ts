@@ -10,7 +10,7 @@ export const CSA_CARD_PAYMENT_URL = 'https://fincs.jp/plan/8030521697119276466/j
 export const CSA_BANK_DETAILS = {
   amount: '330,000円',
   bank: 'ゆうちょ銀行',
-  branch: '〇一八支店',
+  branch: '〇九八支店',
   accountType: '普通',
   accountNumber: '1843444',
   accountName: 'コクサイセイキトケイキヨウカイ',
