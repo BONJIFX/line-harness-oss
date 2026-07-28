@@ -10,7 +10,7 @@ export const CSA_CARD_PAYMENT_URL = 'https://fincs.jp/plan/8030521697119276466/j
 export const CSA_BANK_DETAILS = {
   amount: '330,000円',
   bank: 'ゆうちょ銀行',
-  branch: '〇一八支店',
+  branch: '〇九八支店',
   accountType: '普通',
   accountNumber: '1843444',
   accountName: 'コクサイセイキトケイキヨウカイ',
@@ -150,7 +150,7 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
         <li>ご連絡・お問い合わせは、公式 LINE または下記メールにて承ります。3 営業日以内にご返答いたします。</li>
       </ul></div>
       <div class="condition"><strong>■ 販売事業者</strong><p>
-        販売事業者: 合同会社 GGC<br />
+        販売事業者: 国際正規時計協会<br />
         運営責任者: 郡司 大資<br />
         所在地: 東京都中央区銀座 1-22-11-2F<br />
         電話番号: 050-3138-3671(お電話でのご対応は行っておりません。お問い合わせは公式 LINE またはメールにお願いします)<br />
@@ -387,7 +387,7 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
 
 export function renderCsaTermsPage(): string {
   return renderLegalPage('利用規約', CSA_TERMS_VERSION, `
-    <h2>1. 適用</h2><p>本規約は、合同会社GGCが提供するCandle Smart Academy(CSA)本講座の利用条件を定めます。</p>
+    <h2>1. 適用</h2><p>本規約は、国際正規時計協会が提供するCandle Smart Academy(CSA)本講座の利用条件を定めます。</p>
     <h2>2. 提供内容と期間</h2><p>提供内容は、会員サイト教材、理解度チェック、週次の一般的な相場解説、学習内容のグループ相談、教材にもとづくAIチューター、Discordコミュニティ、認定試験および認定証です。利用期間は利用開始から6か月間です。</p>
     <h2>3. 教育サービスとしての性質</h2><p>本講座は教育サービスです。個別の金融商品の売買、投資判断、利益または成果を保証するものではありません。最終的な投資判断は受講者自身が行います。</p>
     <h2>4. 料金と支払い</h2><p>受講料は総額330,000円(税込)です。カード払いまたは銀行振込により支払います。銀行振込手数料は受講者負担です。</p>
@@ -401,7 +401,7 @@ export function renderCsaTermsPage(): string {
 export function renderCsaCommerceLawPage(): string {
   return renderLegalPage('特定商取引法に基づく表記', CSA_COMMERCE_LAW_VERSION, `
     <dl>
-      <dt>販売事業者</dt><dd>合同会社GGC</dd>
+      <dt>販売事業者</dt><dd>国際正規時計協会</dd>
       <dt>運営責任者</dt><dd>郡司 大資</dd>
       <dt>所在地</dt><dd>東京都中央区銀座1-22-11-2F</dd>
       <dt>電話番号</dt><dd>050-3138-3671<br />お電話でのご対応は行っておりません。お問い合わせは公式LINEまたはメールにお願いします。</dd>

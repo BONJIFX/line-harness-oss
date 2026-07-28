@@ -28,6 +28,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db build
 
+      # 2026-07-29: 顧客事実(振込支店・販売事業者名)の巻き戻り事故の再発防止。
+      # 65d5268 が 71e199d(支店コード修正)を含まない枝から origin/main へ
+      # 乗り、本番の申込ページが誤った支店・事業者名を黙って表示し続けた。
+      # テスト失敗時はデプロイを進めない(このステップの後にビルド・デプロイが続く)。
+      - run: pnpm --filter worker test
+
       - run: pnpm --filter worker build
         env:
           VITE_LIFF_ID: ${{ vars.VITE_LIFF_ID }}
