@@ -436,7 +436,7 @@ export function buildCsaFunnelSummary(applicants: CsaApplicant[]) {
   };
 }
 
-async function loadApplicants(db: D1Database, from: string | null, to: string | null): Promise<CsaApplicant[]> {
+export async function loadApplicants(db: D1Database, from: string | null, to: string | null): Promise<CsaApplicant[]> {
   const [eventsResult, verificationsResult, remindersResult, controlsResult] = await Promise.all([
     db.prepare(
       `SELECT e.id, e.friend_id, e.line_user_id, e.application_id, e.event_type,

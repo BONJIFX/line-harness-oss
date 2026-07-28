@@ -9,6 +9,14 @@ workers_dev = true
 # ═══════════════════════════════════════════════════════════════
 account_id = "00af307b3e516ed14ba6b2a886304412"
 
+# CSA 申込フォーム後押しリマインドのグローバル安全スイッチ。"true" 以外は
+# 全てドライラン(対象件数のログ出力のみ、実送信・DB書き込みなし)。
+# CSA_REMINDER_EPOCH (ISO日時、JST) より前に申込プロセスを開始した申込へは
+# 送らない(2026-07-28 BONJI 裁定「今後のみに決まってるじゃん」)。
+[vars]
+CSA_REMINDER_AUTO_SEND = "false"
+CSA_REMINDER_EPOCH = "2026-07-28T21:50:00+09:00"
+
 [assets]
 directory = "dist/client"
 binding = "ASSETS"
@@ -32,6 +40,10 @@ crons = ["*/5 * * * *"]
 # ═══════════════════════════════════════════════════════════════
 [env.production]
 account_id = "YOUR_ACCOUNT_ID"
+
+[env.production.vars]
+CSA_REMINDER_AUTO_SEND = "false"
+CSA_REMINDER_EPOCH = ""
 
 [env.production.assets]
 directory = "dist/client"

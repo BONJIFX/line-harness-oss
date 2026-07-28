@@ -47,6 +47,7 @@ import { meetCallback } from './routes/meet-callback.js';
 import { messageTemplates } from './routes/message-templates.js';
 import { csa } from './routes/csa.js';
 import { csaFunnel } from './routes/csa-funnel.js';
+import { processCsaReminderDeliveries } from './services/csa-reminder-delivery.js';
 
 export type Env = {
   Bindings: {
@@ -66,6 +67,14 @@ export type Env = {
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
     IG_HARNESS_URL?: string;  // Optional: IG Harness API URL for cross-platform linking
     IG_HARNESS_LINK_SECRET?: string;  // Shared secret for IG Harness link-line webhook
+    // CSA 申込フォーム後押しリマインドのグローバル安全スイッチ。"true" 以外は
+    // 全てドライラン(対象件数のログ出力のみ、実送信・DB書き込みなし)。
+    CSA_REMINDER_AUTO_SEND?: string;
+    // CSA 申込フォーム後押しリマインドの今後限定ガード(ISO 日時)。この時刻より
+    // 前に申込プロセスを開始した(keyword_received)申込へは送らない。未設定・
+    // 不正値は fail-closed(対象0件)。2026-07-28 BONJI 裁定「今後のみに決まって
+    // るじゃん」により新設。
+    CSA_REMINDER_EPOCH?: string;
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
@@ -358,6 +367,7 @@ async function scheduled(
     processStepDeliveries(env.DB, defaultLineClient, env.WORKER_URL),
     processScheduledBroadcasts(env.DB, defaultLineClient, env.WORKER_URL),
     processReminderDeliveries(env.DB, defaultLineClient),
+    processCsaReminderDeliveries(env),
   );
   // キュー処理は1回だけ実行（内部でアカウント別lineClientを解決する）
   // ロック解除: タイムアウトでstuckした配信を復旧
