@@ -14,7 +14,7 @@ account_id = "00af307b3e516ed14ba6b2a886304412"
 # CSA_REMINDER_EPOCH (ISO日時、JST) より前に申込プロセスを開始した申込へは
 # 送らない(2026-07-28 BONJI 裁定「今後のみに決まってるじゃん」)。
 [vars]
-CSA_REMINDER_AUTO_SEND = "false"
+CSA_REMINDER_AUTO_SEND = "true"
 CSA_REMINDER_EPOCH = "2026-07-28T21:50:00+09:00"
 
 [assets]
