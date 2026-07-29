@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:deps": "pnpm --filter @line-crm/line-sdk build && pnpm --filter @line-crm/shared build",
     "dev": "vite dev",
+    "prebuild": "pnpm run build:deps",
     "build": "vite build",
     "preview": "vite preview",
+    "pretest": "pnpm run build:deps",
     "deploy": "vite build && wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

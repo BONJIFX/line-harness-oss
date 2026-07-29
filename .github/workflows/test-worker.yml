@@ -1,0 +1,26 @@
+name: Test Worker
+
+# デプロイ(secrets/vars 必須)から独立した、常に実行できるテスト専用 workflow。
+# push/PR のたびに `pnpm --filter worker test` を必ず走らせる。
+# secrets が未設定でも(= deploy-worker.yml が動かない状態でも)このジョブは通る。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter worker test
