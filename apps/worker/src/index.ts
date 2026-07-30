@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { LineClient } from '@line-crm/line-sdk';
-import { getLineAccounts, getTrafficPoolBySlug, getRandomPoolAccount, getPoolAccounts } from '@line-crm/db';
+import { getLineAccounts } from '@line-crm/db';
+import { resolveBaseLiffUrl, shortLinkUnavailablePage } from './routes/short-link.js';
 import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts, processQueuedBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
@@ -158,19 +159,14 @@ app.get('/r/:ref', async (c) => {
   const baseUrl = new URL(c.req.url).origin;
 
   // Resolve LIFF URL from pool (same logic as /auth/line)
-  let liffUrl = c.env.LIFF_URL;
   const poolSlug = c.req.query('pool') || 'main';
-  const pool = await getTrafficPoolBySlug(c.env.DB, poolSlug);
-  if (pool) {
-    const account = await getRandomPoolAccount(c.env.DB, pool.id);
-    if (account) {
-      if (account.liff_id) liffUrl = `https://liff.line.me/${account.liff_id}`;
-    } else {
-      const allAccounts = await getPoolAccounts(c.env.DB, pool.id);
-      if (allAccounts.length === 0) {
-        if (pool.liff_id) liffUrl = `https://liff.line.me/${pool.liff_id}`;
-      }
-    }
+  const liffUrl = await resolveBaseLiffUrl(c.env.DB, c.env.LIFF_URL, poolSlug);
+
+  // fail-graceful: LIFF_URL が未設定 (稟議#5 により意図的な場合あり) かつ
+  // プール側にも liff_id が無い場合、500 (TypeError) ではなく 404 案内を返す。
+  // ref の実在有無に関わらず同じ判定になる (この経路は ref を検証しないため)。
+  if (!liffUrl) {
+    return c.html(shortLinkUnavailablePage(), 404);
   }
 
   // Build LIFF URL with params (direct link for Universal Link)
