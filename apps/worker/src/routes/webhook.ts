@@ -19,6 +19,7 @@ import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
 import { recordCsaFunnelEventSafely } from './csa-funnel.js';
+import { CSA_ROUTE_VERSION } from './csa-prepayment.js';
 
 const webhook = new Hono<Env>();
 
@@ -567,7 +568,7 @@ async function handleCsaPaymentIntake(
           secret: apiKey,
         })
         : '';
-      const formUrl = baseUrl + '/api/liff/csa-apply?v=20260716-2'
+      const formUrl = baseUrl + `/api/liff/csa-apply?v=${CSA_ROUTE_VERSION}`
         + (formToken ? `&t=${encodeURIComponent(formToken)}` : '');
       messageContent = JSON.stringify(buildCsaApplicationFormFlex(formUrl));
       altText = 'CSAのお申込み前の最終確認です。';

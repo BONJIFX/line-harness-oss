@@ -46,7 +46,21 @@ if (!prepayment.includes('?v=${CSA_ROUTE_VERSION}')) failures.push('legal links 
 if (!csaRoute.includes("'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0'")) {
   failures.push('LIFF routes are missing no-store headers');
 }
-if (!webhook.includes('/api/liff/csa-apply?v=20260716-2')) failures.push('LINE form URL is missing the route cache-buster');
+if (!webhook.includes('`/api/liff/csa-apply?v=${CSA_ROUTE_VERSION}`')) failures.push('LINE form URL is missing the shared route cache-buster');
+for (const closedGate of [
+  "startAt: '2026-07-17T00:00:00+09:00'",
+  "endAt: '2026-07-21T23:59:59+09:00'",
+  'export function isCsaApplicationOpen',
+  '現在、お申込み受付期間外です',
+  '次回募集は公式LINEでご案内します。',
+]) {
+  if (!prepayment.includes(closedGate)) failures.push(`missing expired-campaign gate: ${closedGate}`);
+}
+const closedGateIndex = csaRoute.indexOf('if (!localPreview && !isCsaApplicationOpen())');
+const tokenVerificationIndex = csaRoute.indexOf('verifyCsaFormToken(token');
+if (closedGateIndex < 0 || tokenVerificationIndex < 0 || closedGateIndex > tokenVerificationIndex) {
+  failures.push('expired campaign is not rejected before token verification and form-open DB writes');
+}
 if (!prepayment.includes("await liff.init({ liffId: LIFF_ID });")) failures.push('LIFF is not initialized');
 if (prepayment.includes('liff.sendMessages')) failures.push('bank completion still depends on LIFF sendMessages');
 if (!prepayment.includes("fetch('/api/liff/csa-bank-transfer-complete'")) failures.push('bank completion API call is missing');

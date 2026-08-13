@@ -4,8 +4,47 @@ export const CSA_COPY_SHA256 = 'A1C989D8AE97F6AF45931A18DB0326DB2D70C09767FC8A53
 export const CSA_TERMS_VERSION = 'CSA_TERMS_2026_07_16_DRAFT';
 export const CSA_COMMERCE_LAW_VERSION = 'CSA_COMMERCE_LAW_2026_07_16_DRAFT';
 export const CSA_PRIVACY_VERSION = 'CSA_PRIVACY_2026_07_16_DRAFT';
-export const CSA_ROUTE_VERSION = '20260716-2';
+export const CSA_ROUTE_VERSION = '20260814-1';
 export const CSA_CARD_PAYMENT_URL = 'https://fincs.jp/plan/8030521697119276466/join/personalinfo?planPriceId=742';
+
+export const CSA_APPLICATION_CAMPAIGN = {
+  startAt: '2026-07-17T00:00:00+09:00',
+  endAt: '2026-07-21T23:59:59+09:00',
+} as const;
+
+export function isCsaApplicationOpen(now: Date = new Date()): boolean {
+  const timestamp = now.getTime();
+  return timestamp >= Date.parse(CSA_APPLICATION_CAMPAIGN.startAt)
+    && timestamp <= Date.parse(CSA_APPLICATION_CAMPAIGN.endAt);
+}
+
+export function renderCsaApplicationClosedPage(): string {
+  return `<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CSA お申込み受付期間外</title>
+  <link rel="icon" href="data:," />
+  <style>
+    :root { color-scheme: dark; --gold:#f3c766; --ink:#fff8e6; --muted:#b8c2d8; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at top,#102246 0,#071225 48%,#030813 100%); color:var(--ink); }
+    main { width:min(640px,100%); border:1px solid rgba(221,170,62,.34); border-radius:14px; padding:clamp(24px,6vw,42px); background:rgba(14,26,49,.96); box-shadow:0 18px 50px rgba(0,0,0,.28); text-align:center; }
+    .eyebrow { color:var(--gold); font-size:12px; font-weight:900; letter-spacing:.16em; }
+    h1 { margin:12px 0 14px; font-size:clamp(27px,7vw,34px); line-height:1.35; }
+    p { margin:0; color:var(--muted); line-height:1.8; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">CANDLE SMART ACADEMY</div>
+    <h1>現在、お申込み受付期間外です</h1>
+    <p>次回募集は公式LINEでご案内します。募集開始までお待ちください。</p>
+  </main>
+</body>
+</html>`;
+}
 
 export const CSA_BANK_DETAILS = {
   amount: '330,000円',

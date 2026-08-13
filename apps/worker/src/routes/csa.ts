@@ -10,6 +10,8 @@ import {
   CSA_PRIVACY_VERSION,
   CSA_ROUTE_VERSION,
   CSA_TERMS_VERSION,
+  isCsaApplicationOpen,
+  renderCsaApplicationClosedPage,
   renderCsaCommerceLawPage,
   renderCsaPrepaymentPage,
   renderCsaPrivacyPage,
@@ -27,6 +29,9 @@ csa.get('/api/liff/csa-apply', async (c) => {
   const requestUrl = new URL(c.req.url);
   const localPreview = c.req.query('preview') === '1'
     && (requestUrl.hostname === '127.0.0.1' || requestUrl.hostname === 'localhost');
+  if (!localPreview && !isCsaApplicationOpen()) {
+    return c.html(renderCsaApplicationClosedPage());
+  }
   const tokenPayload = token
     ? await verifyCsaFormToken(token, c.env.API_KEY)
     : null;
