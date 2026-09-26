@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 
 const root = resolve(import.meta.dirname, '..', '..');
 const prepaymentPath = resolve(root, 'apps/worker/src/routes/csa-prepayment.ts');
@@ -8,9 +9,10 @@ const csaRoutePath = resolve(root, 'apps/worker/src/routes/csa.ts');
 const webhookPath = resolve(root, 'apps/worker/src/routes/webhook.ts');
 const migrationPath = resolve(root, 'packages/db/migrations/029_csa_contract_consents.sql');
 const completionMigrationPath = resolve(root, 'packages/db/migrations/030_csa_payment_completion_notices.sql');
-const sourceCopyPath = 'C:/Users/user/.agi-tools/workspaces/persistent-0710-150023/csa-company-sot/COPY_PREPAYMENT_SCREENS_FABLE_2026-07-16.md';
 
 const prepayment = readFileSync(prepaymentPath, 'utf8');
+const compiledCopy = ts.transpileModule(prepayment, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+const { renderCsaPrepaymentPage } = await import(`data:text/javascript;base64,${Buffer.from(compiledCopy).toString('base64')}`);
 const csaRoute = readFileSync(csaRoutePath, 'utf8');
 const webhook = readFileSync(webhookPath, 'utf8');
 const migration = readFileSync(migrationPath, 'utf8');
@@ -21,7 +23,7 @@ const requiredCopy = [
   'Candle Smart Academy(CSA)本講座',
   'ご利用開始から 6 か月間',
   '総額 330,000 円(税込)。上記以外に当社へお支払いいただく費用はありません。',
-  '2026 年 7 月 17 日(金)〜 7 月 21 日(火)',
+  '2026年9月30日(水)23:59まで（日本時間）',
   'ご入金前は、お申込みの取り消しが可能です。ご入金後のキャンセル・返金・中途解約はいたしかねます。',
   '上記を確認・同意して、支払い方法を選ぶ',
   'クレジットカードで支払う',
@@ -49,7 +51,7 @@ if (!csaRoute.includes("'Cache-Control', 'no-store, no-cache, must-revalidate, m
 if (!webhook.includes('`/api/liff/csa-apply?v=${CSA_ROUTE_VERSION}`')) failures.push('LINE form URL is missing the shared route cache-buster');
 for (const closedGate of [
   "startAt: '2026-07-17T00:00:00+09:00'",
-  "endAt: '2026-07-21T23:59:59+09:00'",
+  "endAt: '2026-09-30T23:59:59.999+09:00'",
   'export function isCsaApplicationOpen',
   '現在、お申込み受付期間外です',
   '次回募集は公式LINEでご案内します。',
@@ -92,7 +94,7 @@ if (!webhook.includes('buildCsaPostPaymentFlex()')) {
 
 const expectedWeekdays = [
   ['2026-07-17T12:00:00+09:00', 5, 'Friday'],
-  ['2026-07-21T12:00:00+09:00', 2, 'Tuesday'],
+  ['2026-09-30T12:00:00+09:00', 3, 'Wednesday'],
 ];
 for (const [value, expected, label] of expectedWeekdays) {
   if (new Date(value).getUTCDay() !== expected) failures.push(`weekday mismatch: ${label}`);
@@ -101,8 +103,11 @@ for (const [value, expected, label] of expectedWeekdays) {
 const hashMatch = prepayment.match(/CSA_COPY_SHA256 = '([A-F0-9]{64})'/);
 if (!hashMatch) {
   failures.push('CSA_COPY_SHA256 is missing');
-} else if (existsSync(sourceCopyPath)) {
-  const sourceHash = createHash('sha256').update(readFileSync(sourceCopyPath)).digest('hex').toUpperCase();
+} else {
+  // Bind the consent hash to the actual static visible copy, not an obsolete external draft.
+  const html = renderCsaPrepaymentPage({ liffId: '', formToken: '', tokenLineUserId: '', tokenLineDisplayName: '', localPreview: false });
+  const visibleCopy = html.match(/<main>[\s\S]*?<\/main>/)[0].replace(/\r\n/g, '\n');
+  const sourceHash = createHash('sha256').update(visibleCopy).digest('hex').toUpperCase();
   if (sourceHash !== hashMatch[1]) failures.push(`source copy hash mismatch: ${sourceHash} != ${hashMatch[1]}`);
 }
 

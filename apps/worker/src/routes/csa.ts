@@ -70,6 +70,10 @@ csa.get('/api/liff/csa-privacy', (c) => {
 });
 
 csa.post('/api/liff/csa-application', async (c) => {
+  if (!isCsaApplicationOpen()) {
+    setNoStore(c);
+    return c.json({ ok: false, message: '現在、お申込み受付期間外です。' }, 410);
+  }
   const payload = (await c.req.json().catch(() => null)) as {
     consentEventId?: string;
     lineUserId?: string;

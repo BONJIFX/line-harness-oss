@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CSA_BANK_DETAILS,
+  isCsaApplicationOpen,
   renderCsaCommerceLawPage,
   renderCsaPrepaymentPage,
   renderCsaTermsPage,
@@ -23,6 +24,21 @@ const PREPAYMENT_HTML = renderCsaPrepaymentPage({
 });
 const TERMS_HTML = renderCsaTermsPage();
 const COMMERCE_LAW_HTML = renderCsaCommerceLawPage();
+
+describe('September application deadline (JST)', () => {
+  it.each([
+    ['2026-09-26T17:00:00+09:00', true],
+    ['2026-09-30T23:59:59.999+09:00', true],
+    ['2026-10-01T00:00:00+09:00', false],
+  ])('%s has open=%s', (now, expected) => {
+    expect(isCsaApplicationOpen(new Date(now))).toBe(expected);
+  });
+  it('shows the same deadline on the application and commerce pages', () => {
+    for (const html of [PREPAYMENT_HTML, COMMERCE_LAW_HTML]) {
+      expect(html).toContain('2026年9月30日(水)23:59まで（日本時間）');
+    }
+  });
+});
 
 describe('CSA 顧客事実の巻き戻り防止(支店コード・販売事業者名)', () => {
   it('CSA_BANK_DETAILS の支店は正しい〇九八支店である', () => {

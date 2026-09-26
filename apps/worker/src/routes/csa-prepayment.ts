@@ -1,15 +1,15 @@
 export const CSA_CONTRACT_VERSION = 'CSA_CONTRACT_2026_07_16';
-export const CSA_COPY_VERSION = 'FABLE_PREPAYMENT_FINAL_2026_07_16';
-export const CSA_COPY_SHA256 = 'A1C989D8AE97F6AF45931A18DB0326DB2D70C09767FC8A53121659C20244584D';
+export const CSA_COPY_VERSION = 'CSA_PREPAYMENT_2026_09_26';
+export const CSA_COPY_SHA256 = '4F5EA5626EC89A2288AD1BA51621B23CD2FA29A7917069AD31F40BC90924C9CB';
 export const CSA_TERMS_VERSION = 'CSA_TERMS_2026_07_16_DRAFT';
-export const CSA_COMMERCE_LAW_VERSION = 'CSA_COMMERCE_LAW_2026_07_16_DRAFT';
+export const CSA_COMMERCE_LAW_VERSION = 'CSA_COMMERCE_LAW_2026_09_26';
 export const CSA_PRIVACY_VERSION = 'CSA_PRIVACY_2026_07_16_DRAFT';
-export const CSA_ROUTE_VERSION = '20260814-1';
+export const CSA_ROUTE_VERSION = '20260926-1';
 export const CSA_CARD_PAYMENT_URL = 'https://fincs.jp/plan/8030521697119276466/join/personalinfo?planPriceId=742';
 
 export const CSA_APPLICATION_CAMPAIGN = {
   startAt: '2026-07-17T00:00:00+09:00',
-  endAt: '2026-07-21T23:59:59+09:00',
+  endAt: '2026-09-30T23:59:59.999+09:00',
 } as const;
 
 export function isCsaApplicationOpen(now: Date = new Date()): boolean {
@@ -182,7 +182,7 @@ export function renderCsaPrepaymentPage(input: ApplyPageInput): string {
         <li>銀行振込: 一括払いのみ。お申込み後にご案内する口座へ、募集期間内にお振込みください。振込手数料はご負担ください。</li>
       </ul></div>
       <div class="condition"><strong>■ サービスの提供開始時期</strong><p>ご入金の確認後、ただちに開始します(あなた専用のご案内を LINE へお送りします)。</p></div>
-      <div class="condition"><strong>■ 募集期間</strong><p>2026 年 7 月 17 日(金)〜 7 月 21 日(火)</p></div>
+      <div class="condition"><strong>■ 募集期間</strong><p>2026年9月30日(水)23:59まで（日本時間）</p></div>
       <div class="condition"><strong>■ キャンセル・返金について</strong><ul>
         <li><b>ご入金前は、お申込みの取り消しが可能です。ご入金後のキャンセル・返金・中途解約はいたしかねます。</b>ご入金の確認をもって、直ちにサービスの提供が開始されるためです。</li>
         <li>ただし、法令上認められる契約の解除、または当社の責めに帰すべき事由によりサービスが提供されない場合は、この限りではありません。</li>
@@ -451,7 +451,7 @@ export function renderCsaCommerceLawPage(): string {
       <dt>支払方法・時期</dt><dd>クレジットカードは手続き時に支払いが確定します。銀行振込は一括払いで、募集期間内にお振込みください。</dd>
       <dt>提供開始</dt><dd>入金確認後、ただちに開始します。</dd>
       <dt>利用期間</dt><dd>利用開始から6か月間</dd>
-      <dt>申込期間</dt><dd>2026年7月17日(金)〜7月21日(火)</dd>
+      <dt>申込期間</dt><dd>2026年9月30日(水)23:59まで（日本時間）</dd>
       <dt>キャンセル等</dt><dd>入金前は申込みの取り消しが可能です。入金後のキャンセル・返金・中途解約はいたしかねます。ただし、法令上認められる解除、または当社の責めに帰すべき事由によりサービスが提供されない場合を除きます。</dd>
     </dl>
   `);
